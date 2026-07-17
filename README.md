@@ -2,7 +2,7 @@
 
 > Analysis report writing and PPT auto-generation agent tool — from raw data to slide deck, fully automated.
 
-**[English](README_en.md)** | **[中文](README_zh.md)**
+**[English](https://github.com/SidneyLYZhang/AnaPPTAgent/blob/HEAD/README_en.md)** | **[中文](https://github.com/SidneyLYZhang/AnaPPTAgent/blob/HEAD/README_zh.md)**
 
 ---
 
@@ -30,7 +30,7 @@ Each stage pauses for user review (confirm or revise) before proceeding.
 ### Install
 
 ```bash
-git clone <repo-url> AnaPPTAgent
+git clone https://github.com/SidneyLYZhang/AnaPPTAgent.git AnaPPTAgent
 cd AnaPPTAgent
 uv sync --extra dev
 uv pip install -e .

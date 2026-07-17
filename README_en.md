@@ -2,7 +2,7 @@
 
 Analysis report writing and PPT auto-generation agent tool — from raw data to slide deck, fully automated.
 
-[中文文档](README_zh.md) | **English**
+[中文文档](https://github.com/SidneyLYZhang/AnaPPTAgent/blob/HEAD/README_zh.md) | **English**
 
 ---
 
@@ -19,7 +19,7 @@ AnaPPTAgent is a CLI-based agent that transforms raw data files into polished an
 ## Installation
 
 ```bash
-git clone <repo-url> AnaPPTAgent
+git clone https://github.com/SidneyLYZhang/AnaPPTAgent.git AnaPPTAgent
 cd AnaPPTAgent
 uv sync --extra dev
 ```

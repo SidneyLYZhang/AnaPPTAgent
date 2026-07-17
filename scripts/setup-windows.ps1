@@ -15,7 +15,7 @@
 #>
 
 param(
-    [string]$RepoUrl = "https://github.com/YOUR_USERNAME/AnaPPTAgent.git",
+    [string]$RepoUrl = "https://github.com/SidneyLYZhang/AnaPPTAgent.git",
     [string]$TargetDir = ""
 )
 

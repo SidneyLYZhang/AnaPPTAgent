@@ -3,7 +3,7 @@ name = "anappt"
 version = "0.1.0"
 description = "AnaPPTAgent - Analysis report writing and PPT auto-generation agent tool"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11,<3.14"
 dependencies = [
     "litellm",
     "pyyaml",
@@ -17,6 +17,13 @@ dependencies = [
     "openpyxl",
     "pyarrow",
 ]
+
+[project.urls]
+Homepage = "https://sidneylyzhang.github.io/AnaPPTAgent/"
+Documentation = "https://sidneylyzhang.github.io/AnaPPTAgent/"
+Repository = "https://github.com/SidneyLYZhang/AnaPPTAgent.git"
+Issues = "https://github.com/SidneyLYZhang/AnaPPTAgent/issues"
+Changelog = "https://github.com/SidneyLYZhang/AnaPPTAgent/blob/master/CHANGELOG.md"
 
 [project.scripts]
 anappt = "anappt.cli:main"
