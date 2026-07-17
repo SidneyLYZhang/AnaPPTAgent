@@ -1,0 +1,47 @@
+[project]
+name = "anappt"
+version = "0.1.0"
+description = "AnaPPTAgent - Analysis report writing and PPT auto-generation agent tool"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "litellm",
+    "pyyaml",
+    "rich",
+    "pandas",
+    "polars",
+    "duckdb",
+    "httpx",
+    "pydantic",
+    "ddgs",
+    "openpyxl",
+    "pyarrow",
+]
+
+[project.scripts]
+anappt = "anappt.cli:main"
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-cov",
+    "pytest-asyncio",
+    "ruff",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/anappt"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.coverage.run]
+source = ["anappt"]
+
+[tool.coverage.report]
+fail_under = 80
