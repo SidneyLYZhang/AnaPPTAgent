@@ -8,19 +8,16 @@
     "cli.status_header": "流水线状态",
     "cli.config_prompt": "配置 LLM 模型",
     "cli.config_show": "当前 LLM 配置",
-
     "stage.s1.name": "选题与目标定义",
     "stage.s2.name": "数据需求分析",
     "stage.s3.name": "数据加载与验证",
     "stage.s4.name": "数据分析",
     "stage.s5.name": "报告生成",
     "stage.s6.name": "PPT 生成",
-
     "gate.confirm_prompt": "输入 confirm 确认, 或描述修改意见:",
     "gate.confirmed": "阶段 {stage_id} 已确认。",
     "gate.revising": "根据您的反馈进行修改...",
     "gate.awaiting_review": "等待您确认。",
-
     "error.no_project": "当前目录未找到 AnaPPTAgent 项目。",
     "error.prerequisite_not_met": "前置阶段 {stage_id} 尚未完成。",
     "error.invalid_stage": "无效的阶段 ID: {stage_id}",
@@ -31,18 +28,14 @@
     "error.web_fetch_failed": "Web 读取失败: {error}",
     "error.code_exec_failed": "代码执行失败: {error}",
     "error.code_exec_timeout": "代码执行超时, 超过 {timeout} 秒。",
-
     "s5.remind_open_report": "报告已生成至 {path}, 请打开查看。",
     "s5.remind_edit_or_chat": "您可以直接编辑文件, 或在此描述修改意见。",
     "s5.report_confirmed": "报告内容已确认, 进入 PPT 生成。",
-
     "session.agent_header": "## Agent",
     "session.user_header": "## 用户",
-
     "git.commit_on_exit": "chore: auto-save on exit",
     "git.commit_stage_complete": "feat({stage_id}): complete {stage_name} - {files}",
     "git.commit_confirm": "feat({stage_id}): confirm {stage_name}",
-
     "orchestrator.starting_stage": "开始阶段 {stage_id}: {stage_name}",
     "orchestrator.stage_completed": "阶段 {stage_id} 已完成。",
     "orchestrator.pipeline_complete": "流水线全部完成!",
@@ -51,7 +44,6 @@
     "orchestrator.stage_failed": "阶段 {stage_id} 执行失败: {error}",
     "orchestrator.no_stages": "没有注册的阶段",
     "orchestrator.already_complete": "流水线已完成,无需继续。",
-
     "cli.command_init": "初始化新项目",
     "cli.command_run": "运行流水线",
     "cli.command_resume": "恢复流水线",
@@ -72,7 +64,20 @@
     "cli.unknown_command": "未知命令: {command}",
     "cli.no_config": "未找到模型配置, 使用默认配置。",
     "cli.config_saved": "配置已保存至 {path}",
-
+    "cli.command_setup": "检查环境并安装 dashi-ppt-skill",
+    "setup.checking_env": "正在检查运行环境...",
+    "setup.node_ok": "✓ Node.js {version}",
+    "setup.node_missing": "✗ 未检测到 Node.js,请先安装 Node.js ≥ 20: https://nodejs.org/",
+    "setup.node_outdated": "✗ Node.js 版本过低(当前 {version}),需要 ≥ 20",
+    "setup.npm_ok": "✓ npm {version}",
+    "setup.npm_missing": "✗ 未检测到 npm,请通过 Node.js 安装器安装",
+    "setup.chrome_ok": "✓ 检测到浏览器 {path}",
+    "setup.chrome_missing_warning": "⚠ 未检测到 Chrome/Chromium/Edge,PPTX/PDF 导出将不可用(HTML 生成不受影响)。可通过 CHROME_PATH 环境变量指定",
+    "setup.installing_skill": "正在安装 dashi-ppt-skill 到 {path}...",
+    "setup.updating_skill": "检测到已安装,正在更新 dashi-ppt-skill...",
+    "setup.skill_installed": "✓ dashi-ppt-skill 已就绪: {path}",
+    "setup.skill_install_failed": "✗ skill 安装失败: {error}",
+    "setup.usage_detail": "用法: anappt setup [--dir <path>] [--registry <url>]",
     "interactive.welcome": "欢迎使用 AnaPPTAgent 交互模式",
     "interactive.exit_prompt": "输入 'exit' 退出, 或输入命令:",
     "interactive.stage_label": "阶段",
@@ -86,21 +91,17 @@
     "interactive.help_cmd": "help",
     "interactive.help_text": "可用命令: status, config, reset, exit, confirm",
     "interactive.exiting": "退出中...",
-
     "bridge.generating_ppt": "正在生成 PPT...",
     "bridge.ppt_generated": "PPT 已生成至 {path}",
     "bridge.no_themes": "无可用主题",
     "bridge.markdown_invalid": "Markdown 内容无效",
     "bridge.themes_list": "可用主题:",
-
     "agent.tool_calling": "调用工具: {name}",
     "agent.tool_result": "工具结果: {result}",
     "agent.max_iterations": "达到最大迭代次数, 未获得最终答案。",
     "agent.no_tools": "无可用工具",
-
     "session.new_session": "新会话: 阶段 {stage_id}",
     "session.flushed": "会话日志已写入 {path}",
-
     "s1.generating_topic": "正在生成选题与目标...",
     "s1.topic_generated": "选题已生成",
     "s2.analyzing_requirements": "正在分析数据需求...",
@@ -115,7 +116,6 @@
     "s6.generating_ppt": "正在生成 PPT...",
     "s6.ppt_generated": "PPT 已生成至 {path}",
     "s6.selecting_theme": "请选择主题:",
-
     "project.created": "项目已创建: {path}",
     "project.git_init": "Git 仓库已初始化",
     "project.dir_exists": "目录已存在: {path}"

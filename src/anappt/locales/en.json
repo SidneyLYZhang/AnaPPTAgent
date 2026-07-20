@@ -8,19 +8,16 @@
     "cli.status_header": "Pipeline Status",
     "cli.config_prompt": "Configure LLM models",
     "cli.config_show": "Current LLM configuration",
-
     "stage.s1.name": "Topic & Goal Definition",
     "stage.s2.name": "Data Requirement Analysis",
     "stage.s3.name": "Data Loading & Validation",
     "stage.s4.name": "Data Analysis",
     "stage.s5.name": "Report Generation",
     "stage.s6.name": "PPT Generation",
-
     "gate.confirm_prompt": "Enter 'confirm' to proceed, or describe your revision:",
     "gate.confirmed": "Stage {stage_id} confirmed.",
     "gate.revising": "Revising based on your feedback...",
     "gate.awaiting_review": "Awaiting your review.",
-
     "error.no_project": "No AnaPPTAgent project found in current directory.",
     "error.prerequisite_not_met": "Prerequisite stage {stage_id} is not completed.",
     "error.invalid_stage": "Invalid stage ID: {stage_id}",
@@ -31,18 +28,14 @@
     "error.web_fetch_failed": "Web fetch failed: {error}",
     "error.code_exec_failed": "Code execution failed: {error}",
     "error.code_exec_timeout": "Code execution timed out after {timeout} seconds.",
-
     "s5.remind_open_report": "Report generated at {path}. Please open and review it.",
     "s5.remind_edit_or_chat": "You can edit the file directly, or describe changes here.",
     "s5.report_confirmed": "Report content confirmed. Proceeding to PPT generation.",
-
     "session.agent_header": "## Agent",
     "session.user_header": "## User",
-
     "git.commit_on_exit": "chore: auto-save on exit",
     "git.commit_stage_complete": "feat({stage_id}): complete {stage_name} - {files}",
     "git.commit_confirm": "feat({stage_id}): confirm {stage_name}",
-
     "orchestrator.starting_stage": "Starting stage {stage_id}: {stage_name}",
     "orchestrator.stage_completed": "Stage {stage_id} completed.",
     "orchestrator.pipeline_complete": "Pipeline complete!",
@@ -51,7 +44,6 @@
     "orchestrator.stage_failed": "Stage {stage_id} failed: {error}",
     "orchestrator.no_stages": "No registered stages",
     "orchestrator.already_complete": "Pipeline already complete, nothing to run.",
-
     "cli.command_init": "Initialize a new project",
     "cli.command_run": "Run the pipeline",
     "cli.command_resume": "Resume the pipeline",
@@ -72,7 +64,20 @@
     "cli.unknown_command": "Unknown command: {command}",
     "cli.no_config": "No model config found, using defaults.",
     "cli.config_saved": "Configuration saved to {path}",
-
+    "cli.command_setup": "Check environment and install dashi-ppt-skill",
+    "setup.checking_env": "Checking runtime environment...",
+    "setup.node_ok": "✓ Node.js {version}",
+    "setup.node_missing": "✗ Node.js not detected. Please install Node.js >= 20: https://nodejs.org/",
+    "setup.node_outdated": "✗ Node.js version too old (current {version}), requires >= 20",
+    "setup.npm_ok": "✓ npm {version}",
+    "setup.npm_missing": "✗ npm not detected. Please install via Node.js installer",
+    "setup.chrome_ok": "✓ Browser detected: {path}",
+    "setup.chrome_missing_warning": "⚠ No Chrome/Chromium/Edge detected. PPTX/PDF export will be unavailable (HTML generation unaffected). Set CHROME_PATH env var to specify",
+    "setup.installing_skill": "Installing dashi-ppt-skill to {path}...",
+    "setup.updating_skill": "Existing installation detected, updating dashi-ppt-skill...",
+    "setup.skill_installed": "✓ dashi-ppt-skill is ready: {path}",
+    "setup.skill_install_failed": "✗ Skill installation failed: {error}",
+    "setup.usage_detail": "Usage: anappt setup [--dir <path>] [--registry <url>]",
     "interactive.welcome": "Welcome to AnaPPTAgent Interactive Mode",
     "interactive.exit_prompt": "Type 'exit' to quit, or enter a command:",
     "interactive.stage_label": "Stage",
@@ -86,21 +91,17 @@
     "interactive.help_cmd": "help",
     "interactive.help_text": "Available commands: status, config, reset, exit, confirm",
     "interactive.exiting": "Exiting...",
-
     "bridge.generating_ppt": "Generating PPT...",
     "bridge.ppt_generated": "PPT generated at {path}",
     "bridge.no_themes": "No themes available",
     "bridge.markdown_invalid": "Markdown content is invalid",
     "bridge.themes_list": "Available themes:",
-
     "agent.tool_calling": "Calling tool: {name}",
     "agent.tool_result": "Tool result: {result}",
     "agent.max_iterations": "Max iterations reached without final answer.",
     "agent.no_tools": "No tools available",
-
     "session.new_session": "New session: stage {stage_id}",
     "session.flushed": "Session log written to {path}",
-
     "s1.generating_topic": "Generating topic and goals...",
     "s1.topic_generated": "Topic generated",
     "s2.analyzing_requirements": "Analyzing data requirements...",
@@ -115,7 +116,6 @@
     "s6.generating_ppt": "Generating PPT...",
     "s6.ppt_generated": "PPT generated at {path}",
     "s6.selecting_theme": "Select a theme:",
-
     "project.created": "Project created: {path}",
     "project.git_init": "Git repository initialized",
     "project.dir_exists": "Directory already exists: {path}"

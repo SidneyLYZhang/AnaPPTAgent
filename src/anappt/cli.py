@@ -401,6 +401,100 @@ def cmd_config(args: list[str]) -> int:
     return 1
 
 
+def cmd_setup(args: list[str]) -> int:
+    """处理 'setup' 命令: 检查运行环境并安装/更新 dashi-ppt-skill。
+
+    支持的可选参数:
+      --dir <path>      指定 skill 安装父目录(默认 ~/.anappt/skills)
+      --registry <url>  指定 npm 镜像地址
+
+    Args:
+        args: 命令参数列表,支持 ``--dir <path>`` 与 ``--registry <url>`` 两个可选 flag。
+
+    Returns:
+        退出码(0 表示成功,1 表示失败)。
+    """
+    # 局部导入避免循环依赖
+    from anappt.io.skill_manager import SkillManager
+
+    # 解析参数(简单解析,不引入 argparse)
+    user_dir: str | None = None
+    registry: str | None = None
+    i = 0
+    while i < len(args):
+        flag = args[i]
+        if flag == "--dir":
+            if i + 1 >= len(args):
+                print(t("setup.usage_detail"))
+                return 1
+            user_dir = args[i + 1]
+            i += 2
+        elif flag == "--registry":
+            if i + 1 >= len(args):
+                print(t("setup.usage_detail"))
+                return 1
+            registry = args[i + 1]
+            i += 2
+        else:
+            print(t("setup.usage_detail"))
+            return 1
+
+    # 1. 检查运行环境
+    print(t("setup.checking_env"))
+    mgr = SkillManager()
+
+    # 3. 检查 Node.js
+    node_ok, node_ver = mgr.check_node()
+    if not node_ok and not node_ver:
+        print(t("setup.node_missing"))
+        return 1
+    if not node_ok:
+        print(t("setup.node_outdated", version=node_ver))
+        return 1
+    print(t("setup.node_ok", version=node_ver))
+
+    # 4. 检查 npm
+    npm_ok, npm_ver = mgr.check_npm()
+    if not npm_ok:
+        print(t("setup.npm_missing"))
+        return 1
+    print(t("setup.npm_ok", version=npm_ver))
+
+    # 5. 检查 Chrome(仅警告,不阻塞)
+    chrome_ok, chrome_path = mgr.check_chrome()
+    if not chrome_ok:
+        print(t("setup.chrome_missing_warning"))
+    else:
+        print(t("setup.chrome_ok", path=chrome_path))
+
+    # 6. 确定 skill 父目录
+    if user_dir is not None:
+        skill_parent_dir = Path(user_dir)
+    else:
+        skill_parent_dir = Path.home() / ".anappt" / "skills"
+
+    # 7. 检查 skill 是否已安装
+    existing_skill = mgr.locate_skill()
+    if existing_skill is not None:
+        print(t("setup.updating_skill"))
+    else:
+        print(t("setup.installing_skill", path=str(skill_parent_dir)))
+
+    # 8. 调用安装/更新
+    try:
+        skill_md_path = mgr.install_or_update_skill(skill_parent_dir, registry=registry)
+    except RuntimeError as e:
+        print(t("setup.skill_install_failed", error=str(e)))
+        return 1
+
+    # 9. 持久化 skill 父目录到 config.yaml
+    mgr.save_skill_dir_config(skill_parent_dir)
+
+    # 10. 完成
+    print(t("setup.skill_installed", path=str(skill_md_path)))
+    return 0
+
+
 def _interactive_confirm_loop(
     orch: Orchestrator,
     ui: InteractiveUI,
@@ -507,6 +601,7 @@ _COMMANDS: dict[str, Any] = {
     "status": cmd_status,
     "config": cmd_config,
     "interactive": cmd_interactive,
+    "setup": cmd_setup,
 }
 
 
@@ -530,6 +625,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  anappt status                 {t('cli.command_status')}")
         print(f"  anappt config [show|set]      {t('cli.command_config')}")
         print(f"  anappt interactive            {t('cli.command_init')}")
+        print(f"  anappt setup [--dir <path>] [--registry <url>]    {t('cli.command_setup')}")
         return 0
 
     command = argv[0]

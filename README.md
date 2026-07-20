@@ -42,6 +42,32 @@ uv pip install -e .
 .\scripts\setup-windows.ps1
 ```
 
+### 环境准备(首次使用)
+
+克隆本仓库到本地后,在开始使用前请先运行以下命令完成运行环境检查与 dashi-ppt-skill 安装:
+
+```bash
+anappt setup
+```
+
+该命令会依次:
+1. 检查 Node.js >= 20 与 npm 是否已安装
+2. 警告(非阻塞)若未检测到 Chrome/Chromium/Edge(PPTX/PDF 导出需要)
+3. 通过 `npx dashi-ppt-skill@latest --dir ~/.anappt/skills/` 安装 dashi-ppt-skill 到机器级目录
+4. 将 skill 路径持久化到 `~/.anappt/config.yaml`
+
+**国内网络**:可加 `--registry` 参数使用镜像:
+
+```bash
+anappt setup --registry https://registry.npmmirror.com
+```
+
+**自定义 skill 安装目录**:
+
+```bash
+anappt setup --dir /path/to/skills
+```
+
 ### Quick Start
 
 ```bash
