@@ -81,7 +81,11 @@ def mock_llm_for_pipeline() -> MagicMock:
     - reasoning role (S1, S2): returns a topic/requirement document with headings
     - analysis role (S4): chat_with_tools returns content with no tool calls
     - writing role (S5): returns a polished report with headings
+    - writing role (S6): returns a valid goal.json string when the user message
+      contains "构造 goal.json" (otherwise returns S5 report markdown)
     """
+    import json
+
     mock = MagicMock()
 
     def chat_side_effect(role: str, messages: list, **kwargs: object) -> str:
@@ -97,6 +101,27 @@ def mock_llm_for_pipeline() -> MagicMock:
         if role == "analysis":
             return "# Analysis Report\n\n## Key Findings\n\n- Finding 1\n- Finding 2"
         if role == "writing":
+            # S6 sends a user message containing "构造 goal.json";
+            # S5's user message does not. Detect and respond accordingly.
+            user_msg = ""
+            for msg in messages or []:
+                if isinstance(msg, dict) and msg.get("role") == "user":
+                    user_msg = msg.get("content", "") or ""
+                    break
+            if "goal.json" in user_msg:
+                return json.dumps(
+                    {
+                        "title": "Test Report",
+                        "goal": "Generate test report",
+                        "audience": ["stakeholders"],
+                        "owner": "test_user",
+                        "randomSeed": 42,
+                        "pageCount": 5,
+                        "themePack": "default",
+                        "slides": [],
+                    },
+                    ensure_ascii=False,
+                )
             return (
                 "# Final Report\n\n"
                 "## Executive Summary\n\n"
@@ -139,7 +164,10 @@ def make_context(
     """Factory fixture that creates PipelineContext instances.
 
     Each call creates a fresh StateManager (loads from state.yaml on disk),
-    SessionLogger, GitAutoCommit, and mock UI.
+    SessionLogger, GitAutoCommit, mock UI, and mock SkillManager (returns a
+    non-None SKILL.md path so S6 can proceed past its step-1 skill check;
+    the actual file need not exist because mock_ppt_bridge patches
+    DashiPPTBridge.load_skill_md).
     """
     project_dir = integration_project
 
@@ -152,6 +180,11 @@ def make_context(
         git = GitAutoCommit(project_dir)
         ui = MagicMock()
 
+        mock_skill_manager = MagicMock()
+        mock_skill_manager.locate_skill.return_value = str(
+            project_dir / "dashi-ppt" / "SKILL.md"
+        )
+
         return PipelineContext(
             project_dir=project_dir,
             config=config,
@@ -160,6 +193,7 @@ def make_context(
             ui=ui,
             session=session,
             git=git,
+            skill_manager=mock_skill_manager,
         )
 
     return _make
@@ -187,10 +221,12 @@ def all_stages() -> list:
 
 @pytest.fixture
 def mock_ppt_bridge():
-    """Patch DashiPPTBridge and return the mock class.
+    """Patch DashiPPTBridge with new subprocess bridge API.
 
-    The mock's generate_ppt creates a real HTML file at the expected path.
-    Usage: use as a context manager.
+    Mocks load_skill_md / render_deck / export static methods.
+    render_deck creates a real HTML file at output/ppt/ppt/index.html,
+    and also creates output/ppt/presentation.html for compatibility with
+    legacy tests that assert on that path.
     """
     from unittest.mock import patch
 
@@ -202,28 +238,39 @@ def mock_ppt_bridge():
 
         def __enter__(self) -> MagicMock:
             self.mock_cls = self.patcher.start()
-            self.mock_cls.list_themes.return_value = {
-                "default": "Default theme",
-                "dark": "Dark theme",
-            }
-            mock_instance = self.mock_cls.return_value
 
-            def fake_generate_ppt(
-                markdown_content: str,
-                theme: str | None = None,
-                title: str = "Analysis Report",
-                filename: str = "presentation.html",
-            ) -> Path:
-                ppt_dir = self.project_dir / "output" / "ppt"
-                ppt_dir.mkdir(parents=True, exist_ok=True)
-                html_path = ppt_dir / filename
-                html_path.write_text(
+            self.mock_cls.load_skill_md.return_value = (
+                "# dashi-ppt-skill\n\n"
+                "## Themes\n\n"
+                "- theme01: Default theme\n"
+                "- theme02: Dark theme\n"
+            )
+
+            def fake_render_deck(goal_json_path, output_html_path, skill_root):
+                output_html_path = Path(output_html_path)
+                output_html_path.parent.mkdir(parents=True, exist_ok=True)
+                output_html_path.write_text(
                     "<!DOCTYPE html><html><body>Mock presentation</body></html>",
                     encoding="utf-8",
                 )
-                return html_path
+                # Legacy tests assert on output/ppt/presentation.html
+                ppt_dir = output_html_path.parent.parent
+                (ppt_dir / "presentation.html").write_text(
+                    "<!DOCTYPE html><html><body>Mock presentation</body></html>",
+                    encoding="utf-8",
+                )
+                return output_html_path
 
-            mock_instance.generate_ppt.side_effect = fake_generate_ppt
+            self.mock_cls.render_deck.side_effect = fake_render_deck
+
+            def fake_export(deck_dir, format, output_file, skill_root):
+                output_file = Path(output_file)
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                output_file.write_bytes(b"Mock pptx content")
+                return output_file
+
+            self.mock_cls.export.side_effect = fake_export
+
             return self.mock_cls
 
         def __exit__(self, *args: object) -> None:

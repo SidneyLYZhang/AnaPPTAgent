@@ -132,9 +132,16 @@ class TestOrchestratorRun:
         assert stage.status == StageStatus.AWAITING_REVIEW
 
     def test_run_no_stages_raises(self, orch: Orchestrator, ctx: PipelineContext) -> None:
-        orch.set_context(ctx)
-        with pytest.raises(RuntimeError, match="No registered stages"):
-            orch.run()
+        from anappt import i18n
+
+        i18n._reset_cache()
+        i18n.set_locale("zh")
+        try:
+            orch.set_context(ctx)
+            with pytest.raises(RuntimeError, match="没有注册的阶段"):
+                orch.run()
+        finally:
+            i18n._reset_cache()
 
     def test_run_already_complete(self, orch: Orchestrator, ctx: PipelineContext) -> None:
         """When all stages are completed, should return immediately."""

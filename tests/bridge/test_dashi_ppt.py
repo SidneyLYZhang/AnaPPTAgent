@@ -1,244 +1,212 @@
-"""Tests for DashiPPTBridge."""
+"""Tests for DashiPPTBridge subprocess bridge layer."""
 
 from __future__ import annotations
 
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from anappt.bridge.dashi_ppt import DashiPPTBridge, SlideContent
+from anappt.bridge.dashi_ppt import DashiPPTBridge
 
 
-@pytest.fixture
-def bridge(tmp_path: Path) -> DashiPPTBridge:
-    """Return a DashiPPTBridge with temp output dir."""
-    return DashiPPTBridge(output_dir=tmp_path, theme="default")
+class TestLoadSkillMd:
+    """Tests for load_skill_md static method."""
+
+    def test_returns_file_content(self, tmp_path: Path) -> None:
+        skill_md = tmp_path / "SKILL.md"
+        content = "# dashi-ppt-skill\n\nskill doc"
+        skill_md.write_text(content, encoding="utf-8")
+        result = DashiPPTBridge.load_skill_md(tmp_path)
+        assert result == content
+
+    def test_file_not_found_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError):
+            DashiPPTBridge.load_skill_md(tmp_path)
+
+    def test_utf8_content(self, tmp_path: Path) -> None:
+        skill_md = tmp_path / "SKILL.md"
+        content = "# 中文标题\n\n这是一段中文内容"
+        skill_md.write_text(content, encoding="utf-8")
+        result = DashiPPTBridge.load_skill_md(tmp_path)
+        assert result == content
+        assert "中文标题" in result
 
 
-@pytest.fixture
-def sample_markdown() -> str:
-    """Return sample markdown for testing."""
-    return """# Executive Summary
+class TestRenderDeck:
+    """Tests for render_deck static method."""
 
-This is the executive summary of the analysis.
+    def test_returns_output_path_on_success(self, tmp_path: Path) -> None:
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "render_goal_deck.ps1").write_text("", encoding="utf-8")
+        (scripts_dir / "render_goal_deck.sh").write_text("", encoding="utf-8")
 
-## Key Findings
+        goal_json = tmp_path / "goal.json"
+        goal_json.write_text("{}", encoding="utf-8")
+        output_html = tmp_path / "output.html"
 
-- Finding 1: Revenue grew 20%
-- Finding 2: Customer retention improved
-- Finding 3: Market share increased
+        with patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+            result = DashiPPTBridge.render_deck(goal_json, output_html, tmp_path)
 
-## Methodology
+        assert result == output_html
+        assert isinstance(result, Path)
 
-We used statistical analysis and machine learning.
+    def test_uses_powershell_on_windows(self, tmp_path: Path) -> None:
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "render_goal_deck.ps1").write_text("", encoding="utf-8")
 
-## Conclusions
+        goal_json = tmp_path / "goal.json"
+        output_html = tmp_path / "output.html"
 
-The analysis shows positive trends across all metrics.
-"""
+        with patch("anappt.bridge.dashi_ppt.sys.platform", "win32"), \
+             patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+            DashiPPTBridge.render_deck(goal_json, output_html, tmp_path)
 
+        cmd = mock_run.call_args[0][0]
+        cmd_str = " ".join(cmd)
+        assert "powershell" in cmd_str
+        assert "render_goal_deck.ps1" in cmd_str
 
-class TestListThemes:
-    """Tests for list_themes static method."""
+    def test_uses_bash_on_unix(self, tmp_path: Path) -> None:
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "render_goal_deck.sh").write_text("", encoding="utf-8")
 
-    def test_returns_dict(self) -> None:
-        themes = DashiPPTBridge.list_themes()
-        assert isinstance(themes, dict)
-        assert len(themes) > 0
+        goal_json = tmp_path / "goal.json"
+        output_html = tmp_path / "output.html"
 
-    def test_has_default_theme(self) -> None:
-        themes = DashiPPTBridge.list_themes()
-        assert "default" in themes
+        with patch("anappt.bridge.dashi_ppt.sys.platform", "linux"), \
+             patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+            DashiPPTBridge.render_deck(goal_json, output_html, tmp_path)
 
-    def test_has_multiple_themes(self) -> None:
-        themes = DashiPPTBridge.list_themes()
-        assert len(themes) >= 3
+        cmd = mock_run.call_args[0][0]
+        cmd_str = " ".join(cmd)
+        assert "bash" in cmd_str
+        assert "render_goal_deck.sh" in cmd_str
 
-    def test_returns_copy(self) -> None:
-        themes1 = DashiPPTBridge.list_themes()
-        themes2 = DashiPPTBridge.list_themes()
-        assert themes1 == themes2
-        themes1["new"] = "test"
-        assert "new" not in DashiPPTBridge.list_themes()
+    def test_missing_script_raises_filenotfounderror(self, tmp_path: Path) -> None:
+        goal_json = tmp_path / "goal.json"
+        output_html = tmp_path / "output.html"
 
+        with patch("anappt.bridge.dashi_ppt.sys.platform", "win32"), \
+             patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
+            with pytest.raises(FileNotFoundError):
+                DashiPPTBridge.render_deck(goal_json, output_html, tmp_path)
+            mock_run.assert_not_called()
 
-class TestValidateMarkdown:
-    """Tests for validate_markdown static method."""
+    def test_subprocess_failure_raises_runtimeerror(self, tmp_path: Path) -> None:
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "render_goal_deck.ps1").write_text("", encoding="utf-8")
 
-    def test_valid_with_h1(self) -> None:
-        assert DashiPPTBridge.validate_markdown("# Title\n\nContent") is True
+        goal_json = tmp_path / "goal.json"
+        output_html = tmp_path / "output.html"
 
-    def test_valid_with_h2(self) -> None:
-        assert DashiPPTBridge.validate_markdown("## Section\n\nContent") is True
+        with patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stderr="error", stdout="")
+            with pytest.raises(RuntimeError, match="returncode=1"):
+                DashiPPTBridge.render_deck(goal_json, output_html, tmp_path)
 
-    def test_valid_with_h3(self) -> None:
-        assert DashiPPTBridge.validate_markdown("### Subsection\n\nContent") is True
+    def test_creates_parent_dir(self, tmp_path: Path) -> None:
+        scripts_dir = tmp_path / "scripts"
+        scripts_dir.mkdir()
+        (scripts_dir / "render_goal_deck.ps1").write_text("", encoding="utf-8")
+        (scripts_dir / "render_goal_deck.sh").write_text("", encoding="utf-8")
 
-    def test_empty_content(self) -> None:
-        assert DashiPPTBridge.validate_markdown("") is False
+        goal_json = tmp_path / "goal.json"
+        output_html = tmp_path / "a" / "b" / "c" / "index.html"
 
-    def test_whitespace_only(self) -> None:
-        assert DashiPPTBridge.validate_markdown("   \n  \n") is False
+        with patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+            DashiPPTBridge.render_deck(goal_json, output_html, tmp_path)
 
-    def test_no_headings(self) -> None:
-        assert DashiPPTBridge.validate_markdown("Just plain text without headings") is False
-
-    def test_valid_complex_markdown(self, sample_markdown: str) -> None:
-        assert DashiPPTBridge.validate_markdown(sample_markdown) is True
-
-
-class TestParseMarkdownToSlides:
-    """Tests for parse_markdown_to_slides method."""
-
-    def test_single_slide(self, bridge: DashiPPTBridge) -> None:
-        slides = bridge.parse_markdown_to_slides("# Title\n\nContent")
-        assert len(slides) == 1
-        assert slides[0].title == "Title"
-
-    def test_multiple_slides(self, bridge: DashiPPTBridge, sample_markdown: str) -> None:
-        slides = bridge.parse_markdown_to_slides(sample_markdown)
-        assert len(slides) == 4
-        assert slides[0].title == "Executive Summary"
-        assert slides[1].title == "Key Findings"
-
-    def test_bullets_parsed(self, bridge: DashiPPTBridge) -> None:
-        md = "# Title\n\n- Bullet 1\n- Bullet 2\n- Bullet 3"
-        slides = bridge.parse_markdown_to_slides(md)
-        assert len(slides) == 1
-        assert len(slides[0].bullets) == 3
-        assert slides[0].bullets[0] == "Bullet 1"
-
-    def test_content_parsed(self, bridge: DashiPPTBridge) -> None:
-        md = "# Title\n\nThis is some content.\nMore content here."
-        slides = bridge.parse_markdown_to_slides(md)
-        assert len(slides) == 1
-        assert "This is some content" in slides[0].content
-
-    def test_h2_starts_new_slide(self, bridge: DashiPPTBridge) -> None:
-        md = "# Slide 1\n\nContent 1\n\n# Slide 2\n\nContent 2"
-        slides = bridge.parse_markdown_to_slides(md)
-        assert len(slides) == 2
-        assert slides[0].title == "Slide 1"
-        assert slides[1].title == "Slide 2"
-
-    def test_star_bullets(self, bridge: DashiPPTBridge) -> None:
-        md = "# Title\n\n* Item 1\n* Item 2"
-        slides = bridge.parse_markdown_to_slides(md)
-        assert len(slides[0].bullets) == 2
-
-    def test_empty_markdown(self, bridge: DashiPPTBridge) -> None:
-        slides = bridge.parse_markdown_to_slides("")
-        assert slides == []
-
-    def test_title_only_slide(self, bridge: DashiPPTBridge) -> None:
-        slides = bridge.parse_markdown_to_slides("# Just a title")
-        assert len(slides) == 1
-        assert slides[0].title == "Just a title"
-        assert slides[0].bullets == []
-        assert slides[0].content == ""
+        assert output_html.parent.exists()
+        assert output_html.parent == tmp_path / "a" / "b" / "c"
 
 
-class TestGenerateHTML:
-    """Tests for generate_html method."""
+class TestExport:
+    """Tests for export static method."""
 
-    def test_returns_html_string(self, bridge: DashiPPTBridge) -> None:
-        slides = [SlideContent(title="Test", bullets=["A", "B"])]
-        html = bridge.generate_html(slides)
-        assert isinstance(html, str)
-        assert "<!DOCTYPE html>" in html
-        assert "</html>" in html
+    def test_returns_output_file_on_success_pptx(self, tmp_path: Path) -> None:
+        deck_dir = tmp_path / "deck"
+        deck_dir.mkdir()
+        output_file = tmp_path / "out.pptx"
 
-    def test_contains_slide_titles(self, bridge: DashiPPTBridge) -> None:
-        slides = [SlideContent(title="My Title")]
-        html = bridge.generate_html(slides)
-        assert "My Title" in html
+        with patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+            result = DashiPPTBridge.export(deck_dir, "pptx", output_file, tmp_path)
 
-    def test_contains_bullets(self, bridge: DashiPPTBridge) -> None:
-        slides = [SlideContent(title="Test", bullets=["Bullet One"])]
-        html = bridge.generate_html(slides)
-        assert "Bullet One" in html
+        assert result == output_file
 
-    def test_contains_navigation(self, bridge: DashiPPTBridge) -> None:
-        slides = [SlideContent(title="Test")]
-        html = bridge.generate_html(slides)
-        assert "next()" in html
-        assert "prev()" in html
+    def test_returns_output_file_on_success_pdf(self, tmp_path: Path) -> None:
+        deck_dir = tmp_path / "deck"
+        deck_dir.mkdir()
+        output_file = tmp_path / "out.pdf"
 
-    def test_contains_counter(self, bridge: DashiPPTBridge) -> None:
-        slides = [SlideContent(title="A"), SlideContent(title="B")]
-        html = bridge.generate_html(slides)
-        assert 'id="total"' in html
-        assert 'id="current"' in html
+        with patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+            result = DashiPPTBridge.export(deck_dir, "pdf", output_file, tmp_path)
 
-    def test_first_slide_active(self, bridge: DashiPPTBridge) -> None:
-        slides = [SlideContent(title="A"), SlideContent(title="B")]
-        html = bridge.generate_html(slides)
-        assert "active" in html
+        assert result == output_file
 
-    def test_title_in_html_head(self, bridge: DashiPPTBridge) -> None:
-        slides = [SlideContent(title="Test")]
-        html = bridge.generate_html(slides, title="My Presentation")
-        assert "<title>My Presentation</title>" in html
+    def test_invalid_format_raises_valueerror(self, tmp_path: Path) -> None:
+        deck_dir = tmp_path / "deck"
+        deck_dir.mkdir()
+        output_file = tmp_path / "out.docx"
 
-
-class TestGeneratePPT:
-    """Tests for generate_ppt method."""
-
-    def test_generates_html_file(
-        self, bridge: DashiPPTBridge, sample_markdown: str, tmp_path: Path
-    ) -> None:
-        result = bridge.generate_ppt(sample_markdown, filename="test.html")
-        assert result.exists()
-        assert result.suffix == ".html"
-        content = result.read_text(encoding="utf-8")
-        assert "<!DOCTYPE html>" in content
-
-    def test_invalid_markdown_raises(self, bridge: DashiPPTBridge) -> None:
-        with pytest.raises(ValueError, match="invalid"):
-            bridge.generate_ppt("No headings here")
-
-    def test_empty_content_raises(self, bridge: DashiPPTBridge) -> None:
         with pytest.raises(ValueError):
-            bridge.generate_ppt("")
+            DashiPPTBridge.export(deck_dir, "docx", output_file, tmp_path)
 
-    def test_creates_output_dir(self, tmp_path: Path, sample_markdown: str) -> None:
-        output_dir = tmp_path / "new_dir" / "ppt"
-        bridge = DashiPPTBridge(output_dir=output_dir)
-        bridge.generate_ppt(sample_markdown, filename="test.html")
-        assert output_dir.exists()
+    def test_command_contains_npm_prefix_and_export_format(
+        self, tmp_path: Path
+    ) -> None:
+        deck_dir = tmp_path / "deck"
+        deck_dir.mkdir()
+        output_file = tmp_path / "out.pptx"
 
-    def test_theme_override(self, tmp_path: Path, sample_markdown: str) -> None:
-        bridge = DashiPPTBridge(output_dir=tmp_path, theme="default")
-        bridge.generate_ppt(sample_markdown, theme="dark", filename="test.html")
-        assert bridge.theme == "dark"
+        with patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+            DashiPPTBridge.export(deck_dir, "pptx", output_file, tmp_path)
 
-    def test_invalid_theme_falls_back(self, tmp_path: Path, sample_markdown: str) -> None:
-        bridge = DashiPPTBridge(output_dir=tmp_path)
-        bridge.generate_ppt(sample_markdown, theme="nonexistent", filename="test.html")
-        assert bridge.theme == "default"
+        cmd = mock_run.call_args[0][0]
+        cmd_str = " ".join(cmd)
+        assert "npm" in cmd_str
+        assert "--prefix" in cmd_str
+        assert "project" in cmd_str
+        assert "run" in cmd_str
+        assert "export:pptx" in cmd_str
+        assert str(deck_dir / "ppt") in cmd_str
+
+    def test_subprocess_failure_raises_runtimeerror(self, tmp_path: Path) -> None:
+        deck_dir = tmp_path / "deck"
+        deck_dir.mkdir()
+        output_file = tmp_path / "out.pptx"
+
+        with patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=1, stderr="error", stdout="")
+            with pytest.raises(RuntimeError, match="returncode=1"):
+                DashiPPTBridge.export(deck_dir, "pptx", output_file, tmp_path)
 
 
-class TestSlideContent:
-    """Tests for SlideContent class."""
+class TestConstructor:
+    """Tests for __init__."""
 
-    def test_defaults(self) -> None:
-        sc = SlideContent()
-        assert sc.title == ""
-        assert sc.bullets == []
-        assert sc.content == ""
-        assert sc.image_path == ""
-        assert sc.layout == "content"
+    def test_sets_skill_root_and_output_dir(self, tmp_path: Path) -> None:
+        output_dir = tmp_path / "out"
+        bridge = DashiPPTBridge(skill_root=tmp_path, output_dir=output_dir)
+        assert bridge.skill_root == tmp_path
+        assert bridge.output_dir == output_dir
 
-    def test_with_values(self) -> None:
-        sc = SlideContent(
-            title="Test",
-            bullets=["A", "B"],
-            content="Body text",
-            image_path="/img/a.png",
-            layout="image",
+    def test_accepts_string_paths(self, tmp_path: Path) -> None:
+        bridge = DashiPPTBridge(
+            skill_root=str(tmp_path), output_dir=str(tmp_path / "out")
         )
-        assert sc.title == "Test"
-        assert sc.bullets == ["A", "B"]
-        assert sc.content == "Body text"
-        assert sc.image_path == "/img/a.png"
-        assert sc.layout == "image"
+        assert isinstance(bridge.skill_root, Path)
+        assert isinstance(bridge.output_dir, Path)
+        assert bridge.skill_root == tmp_path
+        assert bridge.output_dir == tmp_path / "out"

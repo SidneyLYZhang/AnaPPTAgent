@@ -126,11 +126,14 @@ class TestFullPipeline:
             )
 
         # --- Verify git log has commit records ---
+        # encoding="utf-8" required: commit messages contain Chinese (zh locale)
+        # and Windows default GBK codec fails to decode them.
         git_log = subprocess.run(
             ["git", "log", "--oneline"],
             cwd=str(project_dir),
             capture_output=True,
             text=True,
+            encoding="utf-8",
             timeout=10,
         )
         assert git_log.returncode == 0

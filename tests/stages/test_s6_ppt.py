@@ -3,48 +3,80 @@
 from __future__ import annotations
 
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from anappt.io.config import DeliveryInfo, ReportConfig
+from anappt.io.config import DeliveryInfo, ProjectInfo, ReportConfig
 from anappt.io.state import StateManager
 from anappt.stages.s6_ppt import S6PPTStage
 from anappt.types import PipelineContext
+
+
+VALID_GOAL_JSON = (
+    '{"title":"Test","goal":"...","audience":[],"owner":"test",'
+    '"randomSeed":42,"pageCount":5,"themePack":"theme03","slides":[]}'
+)
+
+
+@pytest.fixture
+def skill_root(tmp_path: Path) -> Path:
+    """Create a fake dashi-ppt skill root with SKILL.md and render scripts."""
+    skill = tmp_path / "dashi-ppt"
+    skill.mkdir(parents=True, exist_ok=True)
+    (skill / "SKILL.md").write_text("# dashi-ppt-skill\n\nskill doc", encoding="utf-8")
+    scripts_dir = skill / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    (scripts_dir / "render_goal_deck.ps1").write_text("", encoding="utf-8")
+    (scripts_dir / "render_goal_deck.sh").write_text("", encoding="utf-8")
+    return skill
+
+
+@pytest.fixture
+def mock_skill_manager(skill_root: Path) -> MagicMock:
+    """Return a mock SkillManager pointing at the fixture skill_root."""
+    sm = MagicMock()
+    sm.locate_skill.return_value = str(skill_root / "SKILL.md")
+    return sm
 
 
 @pytest.fixture
 def config() -> ReportConfig:
     """Return a ReportConfig with delivery settings."""
     return ReportConfig(
+        project=ProjectInfo(name="test_project"),
         delivery=DeliveryInfo(
             ppt_pages="15-20",
             formats=["pptx", "html"],
-            theme_preference="default",
+            theme_preference="theme03",
         ),
     )
 
 
 @pytest.fixture
-def ctx(tmp_path: Path, config: ReportConfig) -> PipelineContext:
-    """Return a PipelineContext with S5 report output."""
+def ctx(
+    tmp_path: Path,
+    config: ReportConfig,
+    mock_skill_manager: MagicMock,
+) -> PipelineContext:
+    """Return a PipelineContext wired with a mock skill_manager."""
     llm = MagicMock()
+    llm.chat.return_value = VALID_GOAL_JSON
+    ui = MagicMock()
+    ui.input.return_value = "theme02"
     state = StateManager(tmp_path / ".anappt" / "state.yaml")
-
     ctx = PipelineContext(
         project_dir=tmp_path,
         config=config,
         llm=llm,
         state=state,
+        ui=ui,
+        skill_manager=mock_skill_manager,
     )
-
-    # Create S5 report output
-    report_path = ctx.get_artifact_path("report.md")
-    report_path.write_text(
-        "# Executive Summary\n\nKey findings.\n\n## Details\n\n- Point 1\n- Point 2",
-        encoding="utf-8",
+    # S6 reads output/final_report.md first, falling back to report.md
+    ctx.get_artifact_path("final_report.md").write_text(
+        "# Report\n\nContent", encoding="utf-8"
     )
-
     return ctx
 
 
@@ -59,88 +91,6 @@ class TestS6Attributes:
 
     def test_model_role(self) -> None:
         assert S6PPTStage().model_role == "writing"
-
-
-class TestS6Run:
-    """Tests for the run method."""
-
-    def test_successful_run(self, ctx: PipelineContext) -> None:
-        stage = S6PPTStage()
-        output = stage.run(ctx)
-
-        assert output.success is True
-        assert len(output.artifacts) >= 1
-        assert "presentation.html" in output.artifacts[0]
-
-    def test_generates_html_file(self, ctx: PipelineContext) -> None:
-        stage = S6PPTStage()
-        stage.run(ctx)
-
-        ppt_path = ctx.get_artifact_path("ppt") / "presentation.html"
-        assert ppt_path.exists()
-        content = ppt_path.read_text(encoding="utf-8")
-        assert "<!DOCTYPE html>" in content
-        assert "Executive Summary" in content
-
-    def test_missing_report(self, ctx: PipelineContext) -> None:
-        ctx.get_artifact_path("report.md").unlink()
-
-        stage = S6PPTStage()
-        output = stage.run(ctx)
-
-        assert output.success is False
-        assert "Report not found" in output.summary
-
-    def test_uses_config_theme(self, ctx: PipelineContext) -> None:
-        stage = S6PPTStage()
-        output = stage.run(ctx)
-
-        assert output.data["theme"] == "default"
-
-    def test_no_theme_preference_uses_default(
-        self, tmp_path: Path
-    ) -> None:
-        """When no theme in config and no UI, should use default."""
-        config = ReportConfig(
-            delivery=DeliveryInfo(theme_preference=None),
-        )
-        llm = MagicMock()
-        state = StateManager(tmp_path / ".anappt" / "state.yaml")
-        ctx = PipelineContext(
-            project_dir=tmp_path,
-            config=config,
-            llm=llm,
-            state=state,
-        )
-        ctx.get_artifact_path("report.md").write_text("# Title\n\nContent", encoding="utf-8")
-
-        stage = S6PPTStage()
-        output = stage.run(ctx)
-
-        assert output.success is True
-        assert output.data["theme"] == "default"
-
-    def test_get_artifacts(self, ctx: PipelineContext) -> None:
-        stage = S6PPTStage()
-        artifacts = stage.get_artifacts(ctx)
-        assert "output/ppt/presentation.html" in artifacts
-
-    def test_ppt_path_in_data(self, ctx: PipelineContext) -> None:
-        stage = S6PPTStage()
-        output = stage.run(ctx)
-
-        assert "ppt_path" in output.data
-        assert output.data["ppt_path"].endswith("presentation.html")
-
-    def test_invalid_markdown_fails(self, ctx: PipelineContext) -> None:
-        """Report with no headings should fail."""
-        report_path = ctx.get_artifact_path("report.md")
-        report_path.write_text("Just plain text no headings", encoding="utf-8")
-
-        stage = S6PPTStage()
-        output = stage.run(ctx)
-
-        assert output.success is False
 
 
 class TestS6Prerequisites:
@@ -160,3 +110,334 @@ class TestS6Prerequisites:
             state.transition(sid, StageStatus.COMPLETED)
 
         assert stage.validate_prerequisites(state) is True
+
+
+class TestS6RunWorkflow:
+    """Tests for the new 7-step workflow."""
+
+    # ===== Step 1: skill_manager / locate_skill checks =====
+
+    def test_step1_skill_manager_none_returns_failure(
+        self, tmp_path: Path, config: ReportConfig
+    ) -> None:
+        llm = MagicMock()
+        state = StateManager(tmp_path / ".anappt" / "state.yaml")
+        ctx = PipelineContext(
+            project_dir=tmp_path,
+            config=config,
+            llm=llm,
+            state=state,
+            skill_manager=None,
+        )
+        ctx.get_artifact_path("final_report.md").write_text("# x", encoding="utf-8")
+
+        stage = S6PPTStage()
+        output = stage.run(ctx)
+
+        assert output.success is False
+        assert output.next_action == "retry"
+
+    def test_step1_skill_not_installed_returns_failure(
+        self, tmp_path: Path, config: ReportConfig
+    ) -> None:
+        sm = MagicMock()
+        sm.locate_skill.return_value = None
+        llm = MagicMock()
+        state = StateManager(tmp_path / ".anappt" / "state.yaml")
+        ctx = PipelineContext(
+            project_dir=tmp_path,
+            config=config,
+            llm=llm,
+            state=state,
+            skill_manager=sm,
+        )
+        ctx.get_artifact_path("final_report.md").write_text("# x", encoding="utf-8")
+
+        stage = S6PPTStage()
+        output = stage.run(ctx)
+
+        assert output.success is False
+        assert output.next_action == "retry"
+
+    # ===== Step 2: load SKILL.md =====
+
+    def test_step2_skill_md_missing_returns_failure(
+        self, ctx: PipelineContext
+    ) -> None:
+        stage = S6PPTStage()
+        with patch(
+            "anappt.stages.s6_ppt.DashiPPTBridge.load_skill_md",
+            side_effect=FileNotFoundError("SKILL.md missing"),
+        ):
+            output = stage.run(ctx)
+
+        assert output.success is False
+        assert output.next_action == "retry"
+
+    # ===== Steps 3-4: theme selection + goal.json construction =====
+
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.render_deck")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.load_skill_md")
+    def test_step3_4_goal_json_written_correctly(
+        self,
+        mock_load: MagicMock,
+        mock_render: MagicMock,
+        ctx: PipelineContext,
+    ) -> None:
+        mock_load.return_value = "# fake skill"
+        ctx.config.delivery.formats = []  # skip pptx export
+        ctx.llm.chat.return_value = VALID_GOAL_JSON
+
+        stage = S6PPTStage()
+        output = stage.run(ctx)
+
+        assert output.success is True
+        goal_path = ctx.get_artifact_path("ppt") / "goal.json"
+        assert goal_path.exists()
+        content = goal_path.read_text(encoding="utf-8")
+        assert "title" in content
+        assert "theme03" in content
+
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.render_deck")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.load_skill_md")
+    def test_step3_4_goal_json_parse_failure_returns_failure(
+        self,
+        mock_load: MagicMock,
+        mock_render: MagicMock,
+        ctx: PipelineContext,
+    ) -> None:
+        mock_load.return_value = "# fake skill"
+        ctx.llm.chat.return_value = "invalid json"
+
+        stage = S6PPTStage()
+        output = stage.run(ctx)
+
+        assert output.success is False
+        assert output.next_action == "retry"
+
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.render_deck")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.load_skill_md")
+    def test_step3_theme_preference_set_skips_llm_selection(
+        self,
+        mock_load: MagicMock,
+        mock_render: MagicMock,
+        ctx: PipelineContext,
+    ) -> None:
+        mock_load.return_value = "# fake skill"
+        ctx.config.delivery.theme_preference = "theme05"
+        ctx.config.delivery.formats = []  # skip pptx export
+        ctx.llm.chat.return_value = VALID_GOAL_JSON
+
+        stage = S6PPTStage()
+        stage.run(ctx)
+
+        # theme_preference set => only goal.json LLM call, no theme_selection call
+        assert ctx.llm.chat.call_count == 1
+
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.render_deck")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.load_skill_md")
+    def test_step3_no_theme_preference_calls_llm_and_input(
+        self,
+        mock_load: MagicMock,
+        mock_render: MagicMock,
+        ctx: PipelineContext,
+    ) -> None:
+        mock_load.return_value = "# fake skill"
+        ctx.config.delivery.theme_preference = None
+        ctx.config.delivery.formats = []  # skip pptx export
+        ctx.llm.chat.side_effect = [
+            "Theme list:\n1. theme01 - ...",  # theme_selection response
+            VALID_GOAL_JSON.replace('"theme03"', '"theme02"'),  # goal.json
+        ]
+        ctx.ui.input.return_value = "theme02"
+
+        stage = S6PPTStage()
+        stage.run(ctx)
+
+        assert ctx.llm.chat.call_count == 2
+        assert ctx.ui.input.call_count == 1
+        goal_path = ctx.get_artifact_path("ppt") / "goal.json"
+        content = goal_path.read_text(encoding="utf-8")
+        assert "theme02" in content
+
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.render_deck")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.load_skill_md")
+    def test_step3_invalid_user_input_falls_back_to_theme01(
+        self,
+        mock_load: MagicMock,
+        mock_render: MagicMock,
+        ctx: PipelineContext,
+    ) -> None:
+        mock_load.return_value = "# fake skill"
+        ctx.config.delivery.theme_preference = None
+        ctx.config.delivery.formats = []  # skip pptx export
+        ctx.llm.chat.side_effect = [
+            "Theme list:\n1. theme01 - ...",  # theme_selection response
+            VALID_GOAL_JSON,  # goal.json content (irrelevant for assertion)
+        ]
+        ctx.ui.input.return_value = "garbage"
+
+        stage = S6PPTStage()
+        stage.run(ctx)
+
+        # Verify the fallback: the goal.json prompt should use themePack: theme01
+        last_call = ctx.llm.chat.call_args_list[-1]
+        user_msg = last_call.kwargs["messages"][-1]["content"]
+        assert "themePack: theme01" in user_msg
+
+    # ===== Step 5: render_deck =====
+
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.render_deck")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.load_skill_md")
+    def test_step5_render_deck_called_with_correct_args(
+        self,
+        mock_load: MagicMock,
+        mock_render: MagicMock,
+        ctx: PipelineContext,
+    ) -> None:
+        mock_load.return_value = "# fake skill"
+        ctx.config.delivery.formats = []  # skip pptx export
+        ctx.llm.chat.return_value = VALID_GOAL_JSON
+
+        stage = S6PPTStage()
+        stage.run(ctx)
+
+        assert mock_render.called
+        kwargs = mock_render.call_args.kwargs
+        assert "goal_json_path" in kwargs
+        assert "output_html_path" in kwargs
+        assert "skill_root" in kwargs
+
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.render_deck")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.load_skill_md")
+    def test_step5_render_failure_returns_failure(
+        self,
+        mock_load: MagicMock,
+        mock_render: MagicMock,
+        ctx: PipelineContext,
+    ) -> None:
+        mock_load.return_value = "# fake skill"
+        ctx.llm.chat.return_value = VALID_GOAL_JSON
+        mock_render.side_effect = RuntimeError("render failed")
+
+        stage = S6PPTStage()
+        output = stage.run(ctx)
+
+        assert output.success is False
+        assert output.next_action == "retry"
+
+    # ===== Step 7: PPTX export (optional, before step 6) =====
+
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.export")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.render_deck")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.load_skill_md")
+    def test_step7_pptx_in_formats_triggers_export(
+        self,
+        mock_load: MagicMock,
+        mock_render: MagicMock,
+        mock_export: MagicMock,
+        ctx: PipelineContext,
+    ) -> None:
+        mock_load.return_value = "# fake skill"
+        ctx.config.delivery.formats = ["pptx", "html"]
+        ctx.llm.chat.return_value = VALID_GOAL_JSON
+
+        stage = S6PPTStage()
+        output = stage.run(ctx)
+
+        assert mock_export.called
+        assert any("presentation.pptx" in p for p in output.artifacts)
+
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.export")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.render_deck")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.load_skill_md")
+    def test_step7_no_pptx_in_formats_skips_export(
+        self,
+        mock_load: MagicMock,
+        mock_render: MagicMock,
+        mock_export: MagicMock,
+        ctx: PipelineContext,
+    ) -> None:
+        mock_load.return_value = "# fake skill"
+        ctx.config.delivery.formats = ["html"]
+        ctx.llm.chat.return_value = VALID_GOAL_JSON
+
+        stage = S6PPTStage()
+        stage.run(ctx)
+
+        assert not mock_export.called
+
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.export")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.render_deck")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.load_skill_md")
+    def test_step7_export_failure_does_not_block_success(
+        self,
+        mock_load: MagicMock,
+        mock_render: MagicMock,
+        mock_export: MagicMock,
+        ctx: PipelineContext,
+    ) -> None:
+        mock_load.return_value = "# fake skill"
+        ctx.config.delivery.formats = ["pptx"]
+        ctx.llm.chat.return_value = VALID_GOAL_JSON
+        mock_export.side_effect = RuntimeError("export failed")
+
+        stage = S6PPTStage()
+        output = stage.run(ctx)
+
+        # Export failure only emits a warning; stage still succeeds
+        assert output.success is True
+
+    # ===== Step 6: return awaiting_review =====
+
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.export")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.render_deck")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.load_skill_md")
+    def test_step6_returns_awaiting_review_next_action(
+        self,
+        mock_load: MagicMock,
+        mock_render: MagicMock,
+        mock_export: MagicMock,
+        ctx: PipelineContext,
+    ) -> None:
+        mock_load.return_value = "# fake skill"
+        ctx.config.delivery.formats = []  # skip pptx export
+        ctx.llm.chat.return_value = VALID_GOAL_JSON
+
+        stage = S6PPTStage()
+        output = stage.run(ctx)
+
+        assert output.success is True
+        assert output.next_action == "confirm"
+        assert any("index.html" in p for p in output.artifacts)
+
+    # ===== SubTask 7.3: S6 must NOT trigger skill download =====
+
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.export")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.render_deck")
+    @patch("anappt.stages.s6_ppt.DashiPPTBridge.load_skill_md")
+    def test_s6_does_not_trigger_install_or_update_skill(
+        self,
+        mock_load: MagicMock,
+        mock_render: MagicMock,
+        mock_export: MagicMock,
+        ctx: PipelineContext,
+        mock_skill_manager: MagicMock,
+    ) -> None:
+        """S6 整个 run 过程中 install_or_update_skill 必须从未被调用。
+
+        S6 应通过 locate_skill() 定位已安装的 skill;若未安装应直接返回
+        失败,绝不在运行时触发下载(下载职责属于 anappt setup / anappt new)。
+        """
+        mock_load.return_value = "# fake skill"
+        ctx.config.delivery.formats = []  # skip pptx export
+        ctx.llm.chat.return_value = VALID_GOAL_JSON
+
+        stage = S6PPTStage()
+        stage.run(ctx)
+
+        # 关键断言:整个 S6 run 流程中 SkillManager.install_or_update_skill
+        # 从未被调用 (下载职责不在 S6 阶段)
+        mock_skill_manager.install_or_update_skill.assert_not_called()
+        # 也验证 save_skill_dir_config 未被调用 (持久化路径也不在 S6 阶段)
+        mock_skill_manager.save_skill_dir_config.assert_not_called()

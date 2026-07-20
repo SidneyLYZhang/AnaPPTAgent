@@ -89,6 +89,7 @@ class PipelineContext:
         session: Session logger for conversation history.
         git: Git auto-commit manager.
         output_dir: Directory for stage output artifacts.
+        skill_manager: Optional SkillManager instance (None when not injected).
     """
 
     def __init__(
@@ -101,6 +102,7 @@ class PipelineContext:
         session: SessionLogger | None = None,
         git: GitAutoCommit | None = None,
         output_dir: str | Path | None = None,
+        skill_manager: SkillManager | None = None,
     ) -> None:
         """Initialize the pipeline context.
 
@@ -113,6 +115,7 @@ class PipelineContext:
             session: Session logger (optional).
             git: Git auto-commit manager (optional).
             output_dir: Output directory (defaults to project_dir/output).
+            skill_manager: Optional SkillManager instance.
         """
         self.project_dir: Path = Path(project_dir)
         self.config: ReportConfig = config
@@ -123,6 +126,7 @@ class PipelineContext:
         self.git: GitAutoCommit | None = git
         self.output_dir: Path = Path(output_dir) if output_dir else self.project_dir / "output"
         self.output_dir.mkdir(parents=True, exist_ok=True)
+        self.skill_manager = skill_manager
 
     def get_artifact_path(self, filename: str) -> Path:
         """Get the full path for an output artifact file.

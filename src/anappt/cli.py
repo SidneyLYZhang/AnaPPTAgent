@@ -193,6 +193,14 @@ def _load_pipeline_context(
     # Create git auto-commit
     git = GitAutoCommit(project_dir)
 
+    # Construct SkillManager (failure is non-fatal: skill_manager will be None)
+    from anappt.io.skill_manager import SkillManager
+    try:
+        mgr = SkillManager()
+    except Exception as e:
+        print(f"⚠ SkillManager 构造失败,skill_manager 将为 None: {e}")
+        mgr = None
+
     return PipelineContext(
         project_dir=project_dir,
         config=config,
@@ -201,6 +209,7 @@ def _load_pipeline_context(
         ui=ui,
         session=session,
         git=git,
+        skill_manager=mgr,
     )
 
 
@@ -209,14 +218,38 @@ def cmd_init(args: list[str]) -> int:
 
     Args:
         args: Command arguments (project name or path).
+            Optional flags:
+              --no-skill          Skip dashi-ppt-skill download.
+              --registry <url>    npm registry URL passed to install_or_update_skill.
 
     Returns:
         Exit code (0 for success).
     """
-    if not args:
-        project_name = input(t("cli.project_name_prompt"))
-    else:
-        project_name = args[0]
+    project_name = None
+    no_skill = False
+    registry = None
+    i = 0
+    while i < len(args):
+        arg = args[i]
+        if arg == "--no-skill":
+            no_skill = True
+        elif arg == "--registry":
+            if i + 1 >= len(args):
+                print(t("cli.usage"))
+                return 1
+            registry = args[i + 1]
+            i += 1
+        elif arg.startswith("--registry="):
+            registry = arg[len("--registry="):]
+        elif not arg.startswith("--") and project_name is None:
+            project_name = arg
+        else:
+            print(t("cli.usage"))
+            return 1
+        i += 1
+
+    if project_name is None:
+        project_name = input(t("cli.project_name_prompt")).strip()
 
     project_dir = Path.cwd() / project_name
 
@@ -229,6 +262,40 @@ def cmd_init(args: list[str]) -> int:
     except FileExistsError as e:
         print(str(e))
         return 1
+
+    # Skill download sub-flow (anappt new 集成 skill 下载)
+    # Does NOT block cmd_init: project is already created; skill failures
+    # only print warnings so the user can run `anappt setup` later.
+    if no_skill:
+        print(t("cli.new_skill_skipped"))
+    else:
+        try:
+            from anappt.io.skill_manager import SkillManager
+            mgr = SkillManager()
+            print(t("cli.new_skill_checking"))
+            existing = mgr.locate_skill()
+            if existing is not None:
+                print(t("cli.new_skill_already_installed", path=existing))
+            else:
+                node_ok, node_ver = mgr.check_node()
+                if not node_ok:
+                    print(t("cli.new_skill_env_not_met", reason="Node.js ≥20 未安装"))
+                else:
+                    npm_ok, npm_ver = mgr.check_npm()
+                    if not npm_ok:
+                        print(t("cli.new_skill_env_not_met", reason="npm 未安装"))
+                    else:
+                        print(t("cli.new_skill_downloading"))
+                        skill_parent_dir = Path.home() / ".anappt" / "skills"
+                        try:
+                            mgr.install_or_update_skill(skill_parent_dir, registry=registry)
+                            mgr.save_skill_dir_config(skill_parent_dir)
+                            skill_md_path = skill_parent_dir / "dashi-ppt" / "SKILL.md"
+                            print(t("cli.new_skill_ready", path=skill_md_path))
+                        except RuntimeError as e:
+                            print(t("cli.new_skill_download_failed", error=str(e)))
+        except Exception as e:
+            print(t("cli.new_skill_download_failed", error=str(e)))
 
     return 0
 
@@ -619,7 +686,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if not argv:
         print(t("cli.usage"))
-        print(f"  anappt init <project_name>    {t('cli.command_init')}")
+        print(f"  anappt init <project_name> [--no-skill] [--registry <url>]    {t('cli.command_init')}")
+        print(f"  anappt new <project_name> [--no-skill] [--registry <url>]     {t('cli.command_init')}")
         print(f"  anappt run                    {t('cli.command_run')}")
         print(f"  anappt resume                 {t('cli.command_resume')}")
         print(f"  anappt status                 {t('cli.command_status')}")
