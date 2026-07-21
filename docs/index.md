@@ -6,4 +6,4 @@
 
 The content below is mirrored from the repository [README](https://github.com/SidneyLYZhang/AnaPPTAgent/blob/main/README.md).
 
-{% include-markdown "../README.md" %}
+{% include-markdown "../README.md" rewrite_relative_urls=false %}
