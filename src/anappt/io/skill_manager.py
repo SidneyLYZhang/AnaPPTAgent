@@ -58,11 +58,32 @@ class SkillManager:
             return {}
         return data if isinstance(data, dict) else {}
 
+    @staticmethod
+    def _resolve_executable(name: str) -> str | None:
+        """通过 ``shutil.which`` 解析可执行文件路径,兼容 Windows 上的 ``.cmd`` / ``.bat`` 脚本。
+
+        Windows 上 ``npm`` / ``npx`` 以 ``.cmd`` 批处理脚本形式分发(如
+        ``npm.CMD``、``npx.CMD``)。``subprocess.run([name, ...])`` 在
+        ``shell=False`` 时底层调用 ``CreateProcessW``,该 API 不会遵循
+        ``PATHEXT`` 解析 ``.cmd`` / ``.bat``,导致即使软件已安装也会抛
+        ``FileNotFoundError``。``shutil.which`` 会遵循 ``PATHEXT``,能正确
+        返回 ``npm.cmd`` / ``npx.cmd`` 的完整路径,从而绕过此限制。
+
+        Args:
+            name: 可执行文件名(如 ``"node"``、``"npm"``、``"npx"``)。
+
+        Returns:
+            完整路径字符串(找到时);``None`` 表示未在 ``PATH`` 中找到。
+        """
+        return shutil.which(name)
+
     def check_node(self) -> tuple[bool, str]:
         """检查 Node.js 是否安装且版本 ≥ 20。
 
-        调用 `node --version` 并解析 `vMAJOR.MINOR.PATCH` 格式。
-        命令缺失、超时、返回码非零或主版本号 < 20 时返回失败。
+        先通过 ``shutil.which`` 解析 ``node`` 的完整路径(兼容 Windows
+        上的 ``.cmd`` / ``.bat`` 脚本分发),再调用 ``node --version`` 并
+        解析 ``vMAJOR.MINOR.PATCH`` 格式。命令缺失、超时、返回码非零或
+        主版本号 < 20 时返回失败。
 
         Returns:
             元组 `(ok, version)`:
@@ -71,9 +92,13 @@ class SkillManager:
               - 版本解析失败:`(False, raw_output)`。
               - 版本过低:`(False, raw_output)`。
         """
+        node_path = self._resolve_executable("node")
+        if node_path is None:
+            return (False, "")
+
         try:
             result = subprocess.run(
-                ["node", "--version"],
+                [node_path, "--version"],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -98,16 +123,21 @@ class SkillManager:
     def check_npm(self) -> tuple[bool, str]:
         """检查 npm 是否可用。
 
-        调用 `npm --version` 并去除首尾空白。
+        先通过 ``shutil.which`` 解析 ``npm`` 的完整路径(兼容 Windows 上
+        的 ``npm.cmd`` 脚本分发),再调用 ``npm --version`` 并去除首尾空白。
 
         Returns:
             元组 `(ok, version)`:
               - 成功:`(True, "10.x.x")` 形式的版本字符串。
               - 失败:`(False, "")`。
         """
+        npm_path = self._resolve_executable("npm")
+        if npm_path is None:
+            return (False, "")
+
         try:
             result = subprocess.run(
-                ["npm", "--version"],
+                [npm_path, "--version"],
                 capture_output=True,
                 text=True,
                 timeout=10,
@@ -186,9 +216,18 @@ class SkillManager:
             (`<skill_dir>/dashi-ppt/SKILL.md`)。
 
         Raises:
-            RuntimeError: npx 返回码非零,或安装后未找到 `SKILL.md`。
+            RuntimeError: npx 未在 PATH 中找到、npx 返回码非零,或安装后未
+                找到 `SKILL.md`。
         """
-        cmd: list[str] = ["npx"]
+        # 先通过 shutil.which 解析 npx 完整路径(Windows 上 npx 是 .cmd 脚本,
+        # subprocess.run(["npx", ...]) 在 shell=False 时无法直接找到)。
+        npx_path = self._resolve_executable("npx")
+        if npx_path is None:
+            raise RuntimeError(
+                "npx 未在 PATH 中找到,请确保 Node.js / npm 已正确安装"
+            )
+
+        cmd: list[str] = [npx_path]
         if registry:
             cmd.append(f"--registry={registry}")
         cmd.extend(["dashi-ppt-skill@latest", "--dir", str(skill_dir)])

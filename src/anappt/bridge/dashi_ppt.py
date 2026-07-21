@@ -8,6 +8,7 @@ delegates all rendering to the skill's scripts.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -133,15 +134,27 @@ class DashiPPTBridge:
 
         Raises:
             ValueError: If ``format`` is not ``"pptx"`` or ``"pdf"``.
-            RuntimeError: If the npm export script exits with a non-zero code.
+            RuntimeError: If npm is not in PATH, or the npm export script
+                exits with a non-zero code.
         """
         if format not in ("pptx", "pdf"):
             raise ValueError(
                 f"Unsupported format: {format}. Must be 'pptx' or 'pdf'."
             )
 
+        # 通过 shutil.which 解析 npm 完整路径:Windows 上 npm 以 .cmd 批处理
+        # 脚本形式分发,subprocess.run(["npm", ...]) 在 shell=False 时调用
+        # CreateProcessW,该 API 不会遵循 PATHEXT 解析 .cmd / .bat,导致即使
+        # npm 已安装也会抛 FileNotFoundError。shutil.which 遵循 PATHEXT,
+        # 能正确返回 npm.cmd 的完整路径。
+        npm_path = shutil.which("npm")
+        if npm_path is None:
+            raise RuntimeError(
+                "npm 未在 PATH 中找到,请确保 Node.js / npm 已正确安装"
+            )
+
         cmd = [
-            "npm",
+            npm_path,
             "--prefix",
             str(Path(skill_root) / "project"),
             "run",
@@ -151,9 +164,14 @@ class DashiPPTBridge:
             str(output_file),
         ]
 
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=600, check=False
-        )
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=600, check=False
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
+            raise RuntimeError(
+                f"export:{format} 执行失败: {exc}"
+            ) from exc
         if result.returncode != 0:
             raise RuntimeError(
                 f"export:{format} 失败 (returncode={result.returncode}): "

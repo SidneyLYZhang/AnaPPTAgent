@@ -277,8 +277,9 @@ def test_save_skill_dir_config_writes_and_preserves(tmp_path: Path) -> None:
 def test_install_or_update_skill_raises_on_npx_failure(tmp_path: Path) -> None:
     """SubTask 5.9 - ``subprocess.run`` 返回非零时 ``install_or_update_skill`` 抛 RuntimeError。
 
-    mock ``subprocess.run`` 返回 ``returncode=1, stderr="some error"``,
-    验证抛出 ``RuntimeError``,异常消息包含 "some error" 或 "npx 安装失败"。
+    mock ``shutil.which`` 返回假的 npx 路径,``subprocess.run`` 返回
+    ``returncode=1, stderr="some error"``,验证抛出 ``RuntimeError``,
+    异常消息包含 "some error" 或 "npx 安装失败"。
     """
     from unittest.mock import patch
 
@@ -287,9 +288,13 @@ def test_install_or_update_skill_raises_on_npx_failure(tmp_path: Path) -> None:
     mock_result.stderr = "some error"
     mock_result.stdout = ""
 
-    # 用 patch 上下文管理器替换 skill_manager 模块内的 subprocess.run,
-    # 使其返回 mock_result。
-    with patch("anappt.io.skill_manager.subprocess.run", return_value=mock_result):
+    # 用 patch 上下文管理器替换 skill_manager 模块内的 shutil.which 与
+    # subprocess.run,使其分别返回假路径与 mock_result。
+    with patch(
+        "anappt.io.skill_manager.shutil.which", return_value="/fake/npx"
+    ), patch(
+        "anappt.io.skill_manager.subprocess.run", return_value=mock_result
+    ):
         mgr = SkillManager(config_dir=tmp_path)
 
         with pytest.raises(RuntimeError) as exc_info:
@@ -299,3 +304,165 @@ def test_install_or_update_skill_raises_on_npx_failure(tmp_path: Path) -> None:
     # 严格断言 "some error" 在消息中,以确认 mock 生效(而非真实 npx 调用失败)
     assert "some error" in message, f"Expected 'some error' in message, got: {message!r}"
     assert "npx 安装失败" in message
+
+
+# ---------------------------------------------------------------------------
+# SubTask 5.10: shutil.which 解析可执行文件(兼容 Windows .cmd / .bat)
+# ---------------------------------------------------------------------------
+#
+# Windows 上 npm / npx 以 .cmd 批处理脚本形式分发,subprocess.run([name, ...])
+# 在 shell=False 时无法找到 .cmd 文件。check_node / check_npm /
+# install_or_update_skill 应先通过 shutil.which 解析完整路径再调用 subprocess。
+
+
+def test_resolve_executable_uses_shutil_which() -> None:
+    """SubTask 5.10 - ``_resolve_executable`` 直接委托给 ``shutil.which``。"""
+    from unittest.mock import patch
+
+    with patch(
+        "anappt.io.skill_manager.shutil.which", return_value="/fake/path/npm"
+    ) as mock_which:
+        result = SkillManager._resolve_executable("npm")
+
+    assert result == "/fake/path/npm"
+    mock_which.assert_called_once_with("npm")
+
+
+def test_check_node_uses_resolved_path(tmp_path: Path) -> None:
+    """SubTask 5.10 - ``check_node`` 应通过 ``shutil.which`` 解析 node 路径,
+    并把完整路径传给 ``subprocess.run``。"""
+    from unittest.mock import patch
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = "v20.10.0\n"
+    mock_result.stderr = ""
+
+    mgr = SkillManager(config_dir=tmp_path)
+    with patch(
+        "anappt.io.skill_manager.shutil.which", return_value="/fake/node"
+    ) as mock_which, patch(
+        "anappt.io.skill_manager.subprocess.run", return_value=mock_result
+    ) as mock_run:
+        ok, ver = mgr.check_node()
+
+    assert ok is True
+    assert ver == "v20.10.0"
+    mock_which.assert_called_once_with("node")
+    # 验证传给 subprocess.run 的是完整路径,而非裸 "node"
+    args, _kwargs = mock_run.call_args
+    assert args[0][0] == "/fake/node"
+
+
+def test_check_node_returns_false_when_node_not_in_path(tmp_path: Path) -> None:
+    """SubTask 5.10 - ``shutil.which('node')`` 返回 None 时,``check_node``
+    应直接返回 ``(False, "")``,不调用 ``subprocess.run``。"""
+    from unittest.mock import patch
+
+    mgr = SkillManager(config_dir=tmp_path)
+    with patch(
+        "anappt.io.skill_manager.shutil.which", return_value=None
+    ), patch(
+        "anappt.io.skill_manager.subprocess.run"
+    ) as mock_run:
+        ok, ver = mgr.check_node()
+
+    assert ok is False
+    assert ver == ""
+    mock_run.assert_not_called()
+
+
+def test_check_npm_uses_resolved_path(tmp_path: Path) -> None:
+    """SubTask 5.10 - ``check_npm`` 应通过 ``shutil.which`` 解析 npm 路径,
+    并把完整路径传给 ``subprocess.run``(兼容 Windows 上的 npm.cmd)。"""
+    from unittest.mock import patch
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = "11.17.0\n"
+    mock_result.stderr = ""
+
+    mgr = SkillManager(config_dir=tmp_path)
+    with patch(
+        "anappt.io.skill_manager.shutil.which", return_value="/fake/npm.CMD"
+    ) as mock_which, patch(
+        "anappt.io.skill_manager.subprocess.run", return_value=mock_result
+    ) as mock_run:
+        ok, ver = mgr.check_npm()
+
+    assert ok is True
+    assert ver == "11.17.0"
+    mock_which.assert_called_once_with("npm")
+    # 验证传给 subprocess.run 的是完整路径,而非裸 "npm"
+    args, _kwargs = mock_run.call_args
+    assert args[0][0] == "/fake/npm.CMD"
+
+
+def test_check_npm_returns_false_when_npm_not_in_path(tmp_path: Path) -> None:
+    """SubTask 5.10 - ``shutil.which('npm')`` 返回 None 时,``check_npm``
+    应直接返回 ``(False, "")``,不调用 ``subprocess.run``。"""
+    from unittest.mock import patch
+
+    mgr = SkillManager(config_dir=tmp_path)
+    with patch(
+        "anappt.io.skill_manager.shutil.which", return_value=None
+    ), patch(
+        "anappt.io.skill_manager.subprocess.run"
+    ) as mock_run:
+        ok, ver = mgr.check_npm()
+
+    assert ok is False
+    assert ver == ""
+    mock_run.assert_not_called()
+
+
+def test_install_or_update_skill_raises_when_npx_not_in_path(tmp_path: Path) -> None:
+    """SubTask 5.10 - ``shutil.which('npx')`` 返回 None 时,
+    ``install_or_update_skill`` 应直接抛 ``RuntimeError``,不调用
+    ``subprocess.run``。"""
+    from unittest.mock import patch
+
+    mgr = SkillManager(config_dir=tmp_path)
+    with patch(
+        "anappt.io.skill_manager.shutil.which", return_value=None
+    ), patch(
+        "anappt.io.skill_manager.subprocess.run"
+    ) as mock_run:
+        with pytest.raises(RuntimeError) as exc_info:
+            mgr.install_or_update_skill(tmp_path)
+
+    assert "npx" in str(exc_info.value)
+    mock_run.assert_not_called()
+
+
+def test_install_or_update_skill_uses_resolved_npx_path(tmp_path: Path) -> None:
+    """SubTask 5.10 - ``install_or_update_skill`` 应通过 ``shutil.which`` 解析
+    npx 路径,并把完整路径作为 ``subprocess.run`` 命令列表的首个元素。"""
+    from unittest.mock import patch
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stderr = ""
+    mock_result.stdout = ""
+
+    fake_npx = "/fake/npx.CMD"
+    mgr = SkillManager(config_dir=tmp_path)
+    with patch(
+        "anappt.io.skill_manager.shutil.which", return_value=fake_npx
+    ) as mock_which, patch(
+        "anappt.io.skill_manager.subprocess.run", return_value=mock_result
+    ) as mock_run:
+        # 让安装后的 SKILL.md 真实存在,避免触发 "未找到 SKILL.md" RuntimeError
+        skill_md = tmp_path / "dashi-ppt" / "SKILL.md"
+        skill_md.parent.mkdir(parents=True, exist_ok=True)
+        skill_md.touch()
+
+        result = mgr.install_or_update_skill(tmp_path)
+
+    assert result == skill_md
+    mock_which.assert_called_once_with("npx")
+    args, _kwargs = mock_run.call_args
+    assert args[0][0] == fake_npx
+    # 命令应包含 dashi-ppt-skill@latest 与 --dir
+    assert "dashi-ppt-skill@latest" in args[0]
+    assert "--dir" in args[0]

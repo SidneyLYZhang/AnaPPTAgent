@@ -137,7 +137,9 @@ class TestExport:
         deck_dir.mkdir()
         output_file = tmp_path / "out.pptx"
 
-        with patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
+        with patch(
+            "anappt.bridge.dashi_ppt.shutil.which", return_value="/fake/npm"
+        ), patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
             result = DashiPPTBridge.export(deck_dir, "pptx", output_file, tmp_path)
 
@@ -148,7 +150,9 @@ class TestExport:
         deck_dir.mkdir()
         output_file = tmp_path / "out.pdf"
 
-        with patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
+        with patch(
+            "anappt.bridge.dashi_ppt.shutil.which", return_value="/fake/npm"
+        ), patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
             result = DashiPPTBridge.export(deck_dir, "pdf", output_file, tmp_path)
 
@@ -169,13 +173,15 @@ class TestExport:
         deck_dir.mkdir()
         output_file = tmp_path / "out.pptx"
 
-        with patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
+        with patch(
+            "anappt.bridge.dashi_ppt.shutil.which", return_value="/fake/npm"
+        ), patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
             DashiPPTBridge.export(deck_dir, "pptx", output_file, tmp_path)
 
         cmd = mock_run.call_args[0][0]
         cmd_str = " ".join(cmd)
-        assert "npm" in cmd_str
+        assert "/fake/npm" in cmd_str
         assert "--prefix" in cmd_str
         assert "project" in cmd_str
         assert "run" in cmd_str
@@ -187,10 +193,54 @@ class TestExport:
         deck_dir.mkdir()
         output_file = tmp_path / "out.pptx"
 
-        with patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
+        with patch(
+            "anappt.bridge.dashi_ppt.shutil.which", return_value="/fake/npm"
+        ), patch("anappt.bridge.dashi_ppt.subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=1, stderr="error", stdout="")
             with pytest.raises(RuntimeError, match="returncode=1"):
                 DashiPPTBridge.export(deck_dir, "pptx", output_file, tmp_path)
+
+    def test_uses_shutil_which_to_resolve_npm(self, tmp_path: Path) -> None:
+        """``export`` 应通过 ``shutil.which`` 解析 npm 完整路径,
+        并将其作为 ``subprocess.run`` 命令列表的首个元素。
+
+        这是为了兼容 Windows 上 npm 以 ``.cmd`` 脚本分发的情况:
+        ``subprocess.run(["npm", ...])`` 在 ``shell=False`` 时无法找到
+        ``npm.cmd``,会抛 ``FileNotFoundError``。
+        """
+        deck_dir = tmp_path / "deck"
+        deck_dir.mkdir()
+        output_file = tmp_path / "out.pptx"
+        fake_npm = "/fake/path/to/npm.CMD"
+
+        with patch(
+            "anappt.bridge.dashi_ppt.shutil.which", return_value=fake_npm
+        ) as mock_which, patch(
+            "anappt.bridge.dashi_ppt.subprocess.run"
+        ) as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+            DashiPPTBridge.export(deck_dir, "pptx", output_file, tmp_path)
+
+        mock_which.assert_called_once_with("npm")
+        args, _kwargs = mock_run.call_args
+        assert args[0][0] == fake_npm
+
+    def test_npm_not_in_path_raises_runtimeerror(self, tmp_path: Path) -> None:
+        """``shutil.which('npm')`` 返回 None 时,``export`` 应抛
+        ``RuntimeError``,不调用 ``subprocess.run``。"""
+        deck_dir = tmp_path / "deck"
+        deck_dir.mkdir()
+        output_file = tmp_path / "out.pptx"
+
+        with patch(
+            "anappt.bridge.dashi_ppt.shutil.which", return_value=None
+        ), patch(
+            "anappt.bridge.dashi_ppt.subprocess.run"
+        ) as mock_run:
+            with pytest.raises(RuntimeError, match="npm"):
+                DashiPPTBridge.export(deck_dir, "pptx", output_file, tmp_path)
+
+        mock_run.assert_not_called()
 
 
 class TestConstructor:
