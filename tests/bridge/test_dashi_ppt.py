@@ -242,6 +242,30 @@ class TestExport:
 
         mock_run.assert_not_called()
 
+    def test_export_passes_utf8_encoding_to_subprocess(self, tmp_path: Path) -> None:
+        """``export`` 调用 ``subprocess.run`` 时必须显式传
+        ``encoding="utf-8", errors="replace"``。
+
+        ``npm run export:pptx/pdf`` 的输出含 UTF-8 字节(中文路径、进度
+        日志),在中文 Windows 上若用默认 GBK 解码会导致 ``_readerthread``
+        抛 ``UnicodeDecodeError``。
+        """
+        deck_dir = tmp_path / "deck"
+        deck_dir.mkdir()
+        output_file = tmp_path / "out.pptx"
+
+        with patch(
+            "anappt.bridge.dashi_ppt.shutil.which", return_value="/fake/npm"
+        ), patch(
+            "anappt.bridge.dashi_ppt.subprocess.run"
+        ) as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stderr="", stdout="")
+            DashiPPTBridge.export(deck_dir, "pptx", output_file, tmp_path)
+
+        _args, kwargs = mock_run.call_args
+        assert kwargs.get("encoding") == "utf-8"
+        assert kwargs.get("errors") == "replace"
+
 
 class TestConstructor:
     """Tests for __init__."""

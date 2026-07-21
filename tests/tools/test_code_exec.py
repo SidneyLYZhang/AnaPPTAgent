@@ -1,6 +1,8 @@
 """Tests for the code execution module."""
 
 
+from unittest.mock import MagicMock, patch
+
 from anappt.tools.code_exec import ExecutionResult, execute_python
 
 
@@ -129,3 +131,40 @@ class TestExecutePython:
     def test_empty_code(self):
         result = execute_python("", timeout=10)
         assert result.returncode == 0
+
+    def test_chinese_stdout_capture(self):
+        """子 Python 进程输出的中文应被正确捕获,不出现 mojibake。
+
+        依赖两个修复:
+        1. 父进程 ``subprocess.run`` 显式 ``encoding="utf-8"`` 解码子进程输出;
+        2. 子进程 ``env["PYTHONUTF8"] = "1"`` 强制其 ``print()`` 用 UTF-8
+           编码(否则中文 Windows 上子进程会用 GBK 编码,父进程按 UTF-8 解码
+           会得到 mojibake)。
+        """
+        code = "print('你好,世界')"
+        result = execute_python(code, timeout=10)
+        assert result.returncode == 0
+        assert "你好,世界" in result.stdout
+
+    def test_pythonutf8_env_set(self):
+        """``execute_python`` 必须在子进程 env 中设置 ``PYTHONUTF8=1``。
+
+        PEP 540 的 ``PYTHONUTF8`` 环境变量强制 Python 子进程使用 UTF-8 作为
+        stdin/stdout/stderr 编码,在中文 Windows 上覆盖默认的 GBK/CP936。
+        不设置则子进程的 ``print("中文")`` 会用 GBK 编码输出,父进程按
+        UTF-8 解码会得到 mojibake。
+        """
+        with patch(
+            "anappt.tools.code_exec.subprocess.run"
+        ) as mock_run:
+            mock_run.return_value = MagicMock(
+                returncode=0, stdout="", stderr=""
+            )
+            execute_python("print('hi')", timeout=10)
+
+        _args, kwargs = mock_run.call_args
+        env = kwargs.get("env", {})
+        assert env.get("PYTHONUTF8") == "1"
+        # 同时验证 encoding 参数
+        assert kwargs.get("encoding") == "utf-8"
+        assert kwargs.get("errors") == "replace"

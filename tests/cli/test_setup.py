@@ -277,9 +277,9 @@ def test_save_skill_dir_config_writes_and_preserves(tmp_path: Path) -> None:
 def test_install_or_update_skill_raises_on_npx_failure(tmp_path: Path) -> None:
     """SubTask 5.9 - ``subprocess.run`` 返回非零时 ``install_or_update_skill`` 抛 RuntimeError。
 
-    mock ``shutil.which`` 返回假的 npx 路径,``subprocess.run`` 返回
+    mock ``shutil.which`` 返回假的 npm 路径,``subprocess.run`` 返回
     ``returncode=1, stderr="some error"``,验证抛出 ``RuntimeError``,
-    异常消息包含 "some error" 或 "npx 安装失败"。
+    异常消息包含 "some error" 或 "npm exec 安装失败"。
     """
     from unittest.mock import patch
 
@@ -291,7 +291,7 @@ def test_install_or_update_skill_raises_on_npx_failure(tmp_path: Path) -> None:
     # 用 patch 上下文管理器替换 skill_manager 模块内的 shutil.which 与
     # subprocess.run,使其分别返回假路径与 mock_result。
     with patch(
-        "anappt.io.skill_manager.shutil.which", return_value="/fake/npx"
+        "anappt.io.skill_manager.shutil.which", return_value="/fake/npm"
     ), patch(
         "anappt.io.skill_manager.subprocess.run", return_value=mock_result
     ):
@@ -301,9 +301,9 @@ def test_install_or_update_skill_raises_on_npx_failure(tmp_path: Path) -> None:
             mgr.install_or_update_skill(tmp_path)
 
     message = str(exc_info.value)
-    # 严格断言 "some error" 在消息中,以确认 mock 生效(而非真实 npx 调用失败)
+    # 严格断言 "some error" 在消息中,以确认 mock 生效(而非真实 npm 调用失败)
     assert "some error" in message, f"Expected 'some error' in message, got: {message!r}"
-    assert "npx 安装失败" in message
+    assert "npm exec 安装失败" in message
 
 
 # ---------------------------------------------------------------------------
@@ -416,8 +416,8 @@ def test_check_npm_returns_false_when_npm_not_in_path(tmp_path: Path) -> None:
     mock_run.assert_not_called()
 
 
-def test_install_or_update_skill_raises_when_npx_not_in_path(tmp_path: Path) -> None:
-    """SubTask 5.10 - ``shutil.which('npx')`` 返回 None 时,
+def test_install_or_update_skill_raises_when_npm_not_in_path(tmp_path: Path) -> None:
+    """SubTask 5.10 - ``shutil.which('npm')`` 返回 None 时,
     ``install_or_update_skill`` 应直接抛 ``RuntimeError``,不调用
     ``subprocess.run``。"""
     from unittest.mock import patch
@@ -431,13 +431,21 @@ def test_install_or_update_skill_raises_when_npx_not_in_path(tmp_path: Path) -> 
         with pytest.raises(RuntimeError) as exc_info:
             mgr.install_or_update_skill(tmp_path)
 
-    assert "npx" in str(exc_info.value)
+    assert "npm" in str(exc_info.value)
     mock_run.assert_not_called()
 
 
-def test_install_or_update_skill_uses_resolved_npx_path(tmp_path: Path) -> None:
-    """SubTask 5.10 - ``install_or_update_skill`` 应通过 ``shutil.which`` 解析
-    npx 路径,并把完整路径作为 ``subprocess.run`` 命令列表的首个元素。"""
+def test_install_or_update_skill_uses_npm_exec_with_yes_and_separator(
+    tmp_path: Path,
+) -> None:
+    """SubTask 5.10 / 5.11 - ``install_or_update_skill`` 应:
+
+    1. 通过 ``shutil.which`` 解析 npm 路径(兼容 Windows .cmd);
+    2. 用 ``npm exec --yes -- <pkg> --dir <path>`` 而非 ``npx <pkg> --dir <path>``
+       以避免 npx 捆绑的陈旧 npm(如 Scoop persist 目录里的 npm 5.x)与新 Node
+       不兼容;
+    3. ``--`` 分隔符确保 ``--dir`` 被传给 dashi-ppt-skill 而非被 npm exec 解析。
+    """
     from unittest.mock import patch
 
     mock_result = MagicMock()
@@ -445,10 +453,10 @@ def test_install_or_update_skill_uses_resolved_npx_path(tmp_path: Path) -> None:
     mock_result.stderr = ""
     mock_result.stdout = ""
 
-    fake_npx = "/fake/npx.CMD"
+    fake_npm = "/fake/npm.CMD"
     mgr = SkillManager(config_dir=tmp_path)
     with patch(
-        "anappt.io.skill_manager.shutil.which", return_value=fake_npx
+        "anappt.io.skill_manager.shutil.which", return_value=fake_npm
     ) as mock_which, patch(
         "anappt.io.skill_manager.subprocess.run", return_value=mock_result
     ) as mock_run:
@@ -460,9 +468,144 @@ def test_install_or_update_skill_uses_resolved_npx_path(tmp_path: Path) -> None:
         result = mgr.install_or_update_skill(tmp_path)
 
     assert result == skill_md
-    mock_which.assert_called_once_with("npx")
+    mock_which.assert_called_once_with("npm")
     args, _kwargs = mock_run.call_args
-    assert args[0][0] == fake_npx
-    # 命令应包含 dashi-ppt-skill@latest 与 --dir
-    assert "dashi-ppt-skill@latest" in args[0]
-    assert "--dir" in args[0]
+    cmd = args[0]
+    # 命令以解析后的 npm 完整路径开头,而非裸 "npx"
+    assert cmd[0] == fake_npm
+    # 必须包含 exec / --yes / -- 分隔符与 dashi-ppt-skill@latest / --dir
+    assert cmd[1] == "exec"
+    assert "--yes" in cmd
+    assert "--" in cmd
+    assert "dashi-ppt-skill@latest" in cmd
+    assert "--dir" in cmd
+    # --dir 的值应为 skill_dir 的字符串形式
+    dir_idx = cmd.index("--dir")
+    assert cmd[dir_idx + 1] == str(tmp_path)
+    # -- 应在 dashi-ppt-skill@latest 之前,确保 --dir 不被 npm exec 解析
+    sep_idx = cmd.index("--")
+    pkg_idx = cmd.index("dashi-ppt-skill@latest")
+    assert sep_idx < pkg_idx
+
+
+def test_install_or_update_skill_passes_registry_to_npm_exec(tmp_path: Path) -> None:
+    """``install_or_update_skill(registry=...)`` 应将 ``--registry=<url>`` 传给
+    ``npm exec``,且位于 ``--`` 分隔符之前(作为 npm 自身的 flag)。"""
+    from unittest.mock import patch
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stderr = ""
+    mock_result.stdout = ""
+
+    mgr = SkillManager(config_dir=tmp_path)
+    registry_url = "https://registry.npmmirror.com"
+    with patch(
+        "anappt.io.skill_manager.shutil.which", return_value="/fake/npm"
+    ), patch(
+        "anappt.io.skill_manager.subprocess.run", return_value=mock_result
+    ) as mock_run:
+        skill_md = tmp_path / "dashi-ppt" / "SKILL.md"
+        skill_md.parent.mkdir(parents=True, exist_ok=True)
+        skill_md.touch()
+
+        mgr.install_or_update_skill(tmp_path, registry=registry_url)
+
+    args, _kwargs = mock_run.call_args
+    cmd = args[0]
+    assert f"--registry={registry_url}" in cmd
+    # --registry 应位于 -- 之前(npm 自身 flag)
+    reg_idx = cmd.index(f"--registry={registry_url}")
+    sep_idx = cmd.index("--")
+    assert reg_idx < sep_idx
+
+
+# ---------------------------------------------------------------------------
+# 编码参数:subprocess.run 必须显式指定 UTF-8,避免中文 Windows 上 GBK
+# 解码 UTF-8 输出导致 _readerthread 崩溃(UnicodeDecodeError)。
+# ---------------------------------------------------------------------------
+
+
+def test_check_node_passes_utf8_encoding_to_subprocess(tmp_path: Path) -> None:
+    """``check_node`` 调用 ``subprocess.run`` 时必须显式传
+    ``encoding="utf-8", errors="replace"``。
+
+    中文 Windows 上 ``text=True`` 默认用 GBK 解码,而 Node.js 输出 UTF-8,
+    会导致后台 ``_readerthread`` 抛 ``UnicodeDecodeError``。
+    """
+    from unittest.mock import patch
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = "v20.10.0\n"
+    mock_result.stderr = ""
+
+    mgr = SkillManager(config_dir=tmp_path)
+    with patch(
+        "anappt.io.skill_manager.shutil.which", return_value="/fake/node"
+    ), patch(
+        "anappt.io.skill_manager.subprocess.run", return_value=mock_result
+    ) as mock_run:
+        mgr.check_node()
+
+    _args, kwargs = mock_run.call_args
+    assert kwargs.get("encoding") == "utf-8"
+    assert kwargs.get("errors") == "replace"
+
+
+def test_check_npm_passes_utf8_encoding_to_subprocess(tmp_path: Path) -> None:
+    """``check_npm`` 调用 ``subprocess.run`` 时必须显式传
+    ``encoding="utf-8", errors="replace"``。"""
+    from unittest.mock import patch
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stdout = "11.17.0\n"
+    mock_result.stderr = ""
+
+    mgr = SkillManager(config_dir=tmp_path)
+    with patch(
+        "anappt.io.skill_manager.shutil.which", return_value="/fake/npm.CMD"
+    ), patch(
+        "anappt.io.skill_manager.subprocess.run", return_value=mock_result
+    ) as mock_run:
+        mgr.check_npm()
+
+    _args, kwargs = mock_run.call_args
+    assert kwargs.get("encoding") == "utf-8"
+    assert kwargs.get("errors") == "replace"
+
+
+def test_install_or_update_skill_passes_utf8_encoding_to_subprocess(
+    tmp_path: Path,
+) -> None:
+    """``install_or_update_skill`` 调用 ``subprocess.run`` 时必须显式传
+    ``encoding="utf-8", errors="replace"``。
+
+    这是用户实际触发 ``UnicodeDecodeError`` 崩溃的调用点:npm exec 安装
+    dashi-ppt-skill 时输出含 UTF-8 字节的日志,在中文 Windows 上被 GBK
+    解码导致崩溃。
+    """
+    from unittest.mock import patch
+
+    mock_result = MagicMock()
+    mock_result.returncode = 0
+    mock_result.stderr = ""
+    mock_result.stdout = ""
+
+    mgr = SkillManager(config_dir=tmp_path)
+    with patch(
+        "anappt.io.skill_manager.shutil.which", return_value="/fake/npm"
+    ), patch(
+        "anappt.io.skill_manager.subprocess.run", return_value=mock_result
+    ) as mock_run:
+        # 让安装后的 SKILL.md 真实存在,避免触发 "未找到 SKILL.md" RuntimeError
+        skill_md = tmp_path / "dashi-ppt" / "SKILL.md"
+        skill_md.parent.mkdir(parents=True, exist_ok=True)
+        skill_md.touch()
+
+        mgr.install_or_update_skill(tmp_path)
+
+    _args, kwargs = mock_run.call_args
+    assert kwargs.get("encoding") == "utf-8"
+    assert kwargs.get("errors") == "replace"

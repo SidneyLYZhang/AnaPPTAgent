@@ -102,7 +102,14 @@ class DashiPPTBridge:
                 f"渲染脚本缺失: {script_path},请重新运行 'anappt setup'"
             )
 
-        result = subprocess.run(cmd, capture_output=True, text=True, check=False)
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            check=False,
+        )
         if result.returncode != 0:
             raise RuntimeError(
                 f"render_deck 失败 (returncode={result.returncode}): "
@@ -166,7 +173,13 @@ class DashiPPTBridge:
 
         try:
             result = subprocess.run(
-                cmd, capture_output=True, text=True, timeout=600, check=False
+                cmd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                timeout=600,
+                check=False,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
             raise RuntimeError(

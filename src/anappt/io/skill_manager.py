@@ -101,6 +101,8 @@ class SkillManager:
                 [node_path, "--version"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 check=False,
             )
@@ -140,6 +142,8 @@ class SkillManager:
                 [npm_path, "--version"],
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
                 check=False,
             )
@@ -204,10 +208,16 @@ class SkillManager:
         skill_dir: Path,
         registry: str | None = None,
     ) -> Path:
-        """通过 `npx dashi-ppt-skill@latest --dir <skill_dir>` 安装或更新 skill。
+        """通过 `npm exec --yes -- dashi-ppt-skill@latest --dir <skill_dir>` 安装或更新 skill。
+
+        使用 `npm exec`(npm 6.12+)而非 `npx`:`npx` 自带一份 npm,
+        某些发行版(如 Windows Scoop 的 `persist` 目录)会保留过时的
+        `npx` 与捆绑的 npm 5.x,与新版 Node.js 不兼容(典型报错
+        ``cb.apply is not a function``)。`npm exec` 直接使用用户安装的
+        npm(本工具在 ``check_npm`` 中已验证),避免该问题。
 
         Args:
-            skill_dir: skill 安装父目录;npx 会将 skill 安装到
+            skill_dir: skill 安装父目录;npm exec 会将 skill 安装到
                 `<skill_dir>/dashi-ppt/` 子目录中。
             registry: 可选的 npm 镜像地址(如 `https://registry.npmmirror.com`)。
 
@@ -216,37 +226,44 @@ class SkillManager:
             (`<skill_dir>/dashi-ppt/SKILL.md`)。
 
         Raises:
-            RuntimeError: npx 未在 PATH 中找到、npx 返回码非零,或安装后未
-                找到 `SKILL.md`。
+            RuntimeError: npm 未在 PATH 中找到、npm exec 返回码非零,或安装
+                后未找到 `SKILL.md`。
         """
-        # 先通过 shutil.which 解析 npx 完整路径(Windows 上 npx 是 .cmd 脚本,
-        # subprocess.run(["npx", ...]) 在 shell=False 时无法直接找到)。
-        npx_path = self._resolve_executable("npx")
-        if npx_path is None:
+        # 先通过 shutil.which 解析 npm 完整路径(Windows 上 npm 是 .cmd 脚本,
+        # subprocess.run(["npm", ...]) 在 shell=False 时无法直接找到)。
+        npm_path = self._resolve_executable("npm")
+        if npm_path is None:
             raise RuntimeError(
-                "npx 未在 PATH 中找到,请确保 Node.js / npm 已正确安装"
+                "npm 未在 PATH 中找到,请确保 Node.js / npm 已正确安装"
             )
 
-        cmd: list[str] = [npx_path]
+        # 命令结构:
+        #   npm exec --yes [--registry=<url>] -- dashi-ppt-skill@latest --dir <path>
+        #   - --yes: 跳过 "OK to install?" 交互提示(本工具为非交互式)
+        #   - --:    分隔 npm exec 自身参数与被执行命令的参数,确保 --dir
+        #            被传递给 dashi-ppt-skill 而非被 npm exec 解析
+        cmd: list[str] = [npm_path, "exec", "--yes"]
         if registry:
             cmd.append(f"--registry={registry}")
-        cmd.extend(["dashi-ppt-skill@latest", "--dir", str(skill_dir)])
+        cmd.extend(["--", "dashi-ppt-skill@latest", "--dir", str(skill_dir)])
 
         try:
             result = subprocess.run(
                 cmd,
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=300,
                 check=False,
             )
         except (FileNotFoundError, subprocess.TimeoutExpired) as exc:
-            raise RuntimeError(f"npx 安装失败: {exc}") from exc
+            raise RuntimeError(f"npm exec 安装失败: {exc}") from exc
 
         if result.returncode != 0:
             stderr = (result.stderr or "").strip()
             raise RuntimeError(
-                f"npx 安装失败(returncode={result.returncode}): {stderr}"
+                f"npm exec 安装失败(returncode={result.returncode}): {stderr}"
             )
 
         expected_path = Path(skill_dir) / "dashi-ppt" / "SKILL.md"

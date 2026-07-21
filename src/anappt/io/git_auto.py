@@ -48,6 +48,8 @@ class GitAutoCommit:
                 cwd=str(self.project_dir),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             return result.returncode == 0 and result.stdout.strip() == "true"
@@ -67,6 +69,8 @@ class GitAutoCommit:
                     cwd=str(self.project_dir),
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=10,
                 )
         else:
@@ -76,6 +80,8 @@ class GitAutoCommit:
                 cwd=str(self.project_dir),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             # Reset session_history if it was staged
@@ -86,6 +92,8 @@ class GitAutoCommit:
                     cwd=str(self.project_dir),
                     capture_output=True,
                     text=True,
+                    encoding="utf-8",
+                    errors="replace",
                     timeout=10,
                 )
 
@@ -104,6 +112,8 @@ class GitAutoCommit:
                 cwd=str(self.project_dir),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=30,
             )
             # Return code 0 means success, code 1 means "nothing to commit" which is fine

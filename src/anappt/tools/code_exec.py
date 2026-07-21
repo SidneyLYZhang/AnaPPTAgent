@@ -105,12 +105,15 @@ def execute_python(
         env = os.environ.copy()
         env["ANAPPT_ALLOWED_DIRS"] = allowed_str
         env["ANAPPT_TEMP_DIR"] = tempfile.gettempdir()
+        env["PYTHONUTF8"] = "1"  # 强制子 Python 进程使用 UTF-8 stdin/stdout
 
         result = subprocess.run(
             [sys.executable, wrapper_path],
             input=code,
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=timeout,
             env=env,
         )

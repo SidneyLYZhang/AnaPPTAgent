@@ -121,6 +121,8 @@ class ProjectInitializer:
                 cwd=str(project_path),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             # Initial commit
@@ -129,6 +131,8 @@ class ProjectInitializer:
                 cwd=str(project_path),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
             subprocess.run(
@@ -136,6 +140,8 @@ class ProjectInitializer:
                 cwd=str(project_path),
                 capture_output=True,
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 timeout=10,
             )
         except (subprocess.SubprocessError, FileNotFoundError, OSError):
