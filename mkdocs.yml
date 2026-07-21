@@ -56,6 +56,16 @@ extra:
 plugins:
   - search
   - include-markdown
+  - i18n:
+      default_language: zh
+      languages:
+        - locale: zh
+          default: true
+          name: 中文
+          build: true
+        - locale: en
+          name: English
+          build: true
 
 markdown_extensions:
   - admonition
@@ -86,12 +96,10 @@ nav:
   - README:
       - English: README_en.md
       - 中文: README_zh.md
+  - Installation: installation.md
   - Usage Guide:
       - CLI: cli-usage.md
       - Interactive TUI: tui-usage.md
   - Workflow:
       - Report Generation (S1-S5): report-workflow.md
       - PPT Generation (S6): ppt-workflow.md
-  - Specs:
-      - Design: superpowers/specs/2026-07-17-anappt-design.md
-      - Implementation Plan: superpowers/specs/2026-07-17-anappt-implementation-plan.md
