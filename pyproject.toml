@@ -1,9 +1,12 @@
 [project]
 name = "anappt"
-version = "0.2.7"
+version = "0.3.0"
 description = "AnaPPTAgent - Analysis report writing and PPT auto-generation agent tool"
 readme = "README.md"
 requires-python = ">=3.11,<3.14"
+authors = [
+    { name = "Sidney Zhang" },
+]
 dependencies = [
     "litellm",
     "pyyaml",
