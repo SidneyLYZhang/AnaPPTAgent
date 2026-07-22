@@ -71,7 +71,10 @@ class AnaPPTLLM:
             params["api_key"] = role_config.api_key
         if role_config.api_base:
             params["api_base"] = role_config.api_base
-        params.update(kwargs)
+        # Apply thinking params from config (caller kwargs take precedence)
+        thinking_params = _map_thinking_to_params(role_config.provider, role_config.thinking)
+        params.update(thinking_params)
+        params.update(kwargs)  # caller-supplied kwargs override thinking params
         return params
 
     def chat(self, role: ModelRole, messages: list[dict[str, str]], **kwargs: Any) -> str:
@@ -142,6 +145,67 @@ class AnaPPTLLM:
         return result
 
 
+def _map_thinking_to_params(provider: str, thinking: str | int | bool | None) -> dict[str, Any]:
+    """Map the ``thinking`` config field to LiteLLM provider-specific params.
+
+    Semantics:
+    - None (default): for known providers that default to non-max thinking
+      (e.g. OpenAI o-series defaults to ``medium``), proactively pass the
+      "max" param (``reasoning_effort="high"``). For other providers, pass
+      nothing so the model uses its default (which is already max).
+    - String ``FALSE``/``OFF`` (case-insensitive) or bool False: pass the
+      provider's "disable thinking" param. OpenAI: ``reasoning_effort="minimal"``.
+      Anthropic: pass nothing (omit ``thinking``). Unknown providers: pass nothing.
+    - String ``low``/``medium``/``high``: OpenAI ``reasoning_effort=<value>``.
+      Other providers: pass nothing (unsupported, silently skipped).
+    - Integer N: Anthropic ``thinking={"type": "enabled", "budget_tokens": N}``.
+      Other providers: pass nothing (silently skipped).
+
+    Args:
+        provider: The provider string from ModelRoleConfig.provider.
+        thinking: The thinking config value.
+
+    Returns:
+        Dict of extra params to merge into litellm.completion() kwargs.
+    """
+    provider_lower = (provider or "").lower()
+    is_openai = "openai" in provider_lower or provider_lower == ""
+    is_anthropic = "anthropic" in provider_lower or "claude" in provider_lower
+
+    # Case 1: None (default) - proactively use max for OpenAI o-series
+    if thinking is None:
+        if is_openai:
+            return {"reasoning_effort": "high"}
+        return {}
+
+    # Case 2: Disabled (FALSE/OFF string case-insensitive, or bool False)
+    is_disabled = thinking is False or (
+        isinstance(thinking, str) and thinking.strip().upper() in ("FALSE", "OFF")
+    )
+    if is_disabled:
+        if is_openai:
+            return {"reasoning_effort": "minimal"}
+        # Anthropic & unknown providers: pass nothing (omit thinking)
+        return {}
+
+    # Case 3: Explicit strength string (low/medium/high)
+    if isinstance(thinking, str) and thinking.strip().lower() in ("low", "medium", "high"):
+        if is_openai:
+            return {"reasoning_effort": thinking.strip().lower()}
+        # Other providers: silently skipped
+        return {}
+
+    # Case 4: Integer N (budget_tokens) - only Anthropic
+    if isinstance(thinking, int) and not isinstance(thinking, bool):
+        if is_anthropic:
+            return {"thinking": {"type": "enabled", "budget_tokens": thinking}}
+        # Other providers: silently skipped
+        return {}
+
+    # Anything else (bool True, unknown strings, etc.): silently skip
+    return {}
+
+
 # --- Global Configuration Management ---
 
 
@@ -166,40 +230,6 @@ def load_global_config() -> ModelsConfig:
     if not config_path.exists():
         return ModelsConfig()
     return ModelsConfig.from_yaml(config_path)
-
-
-def merge_config(global_config: ModelsConfig, project_config: ModelsConfig | None) -> ModelsConfig:
-    """Merge project-level config over global config.
-
-    Project-level settings override global settings for each role.
-    Only non-empty fields in the project config override the global config.
-
-    Args:
-        global_config: The global configuration.
-        project_config: The project-level configuration (may be None).
-
-    Returns:
-        Merged ModelsConfig.
-    """
-    if project_config is None:
-        return global_config
-
-    def merge_role(
-        global_role: ModelRoleConfig, project_role: ModelRoleConfig
-    ) -> ModelRoleConfig:
-        """Merge a single role config, project overrides global."""
-        return ModelRoleConfig(
-            provider=project_role.provider if project_role.provider else global_role.provider,
-            model=project_role.model if project_role.model else global_role.model,
-            api_base=project_role.api_base if project_role.api_base else global_role.api_base,
-            api_key=project_role.api_key if project_role.api_key else global_role.api_key,
-        )
-
-    return ModelsConfig(
-        reasoning=merge_role(global_config.reasoning, project_config.reasoning),
-        analysis=merge_role(global_config.analysis, project_config.analysis),
-        writing=merge_role(global_config.writing, project_config.writing),
-    )
 
 
 def save_global_config(config: ModelsConfig) -> Path:

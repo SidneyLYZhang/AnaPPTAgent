@@ -18,6 +18,8 @@ from typing import Any
 import httpx
 from pydantic import BaseModel
 
+from anappt.io.config import ModelsConfig, WebSearchConfig
+
 
 class SearchResult(BaseModel):
     """A single web search result."""
@@ -33,6 +35,23 @@ class SearchBackend(StrEnum):
     DUCKDUCKGO = "duckduckgo"
     ANYSEARCH = "anysearch"
     ZAI = "zai"
+
+
+# Module-level config injected from ModelsConfig (env vars still take precedence)
+_config: WebSearchConfig | None = None
+
+
+def configure_from_models_config(models_config: ModelsConfig) -> None:
+    """Inject web search config from the global ModelsConfig.
+
+    Env vars (ANYSEARCH_API_KEY, ZAI_API_KEY, WEB_SEARCH_BACKEND) always
+    take precedence over the injected yaml config.
+
+    Args:
+        models_config: The resolved global ModelsConfig.
+    """
+    global _config
+    _config = models_config.web_search
 
 
 class SearchBackendBase(ABC):
@@ -65,32 +84,60 @@ class SearchBackendBase(ABC):
 
 
 def get_backend() -> SearchBackend:
-    """Determine which search backend to use based on available API keys.
+    """Determine which search backend to use.
 
-    Priority:
-    1. If ANYSEARCH_API_KEY is set, use AnySearch
-    2. If ZAI_API_KEY is set, use z.ai
-    3. If both are set, check WEB_SEARCH_BACKEND env var
-    4. Otherwise, fall back to DuckDuckGo
+    Priority for backend choice:
+    1. WEB_SEARCH_BACKEND env var (if set to a valid value)
+    2. web_search.backend from injected ModelsConfig (yaml)
+    3. Auto-select based on available API keys (env > yaml)
+
+    If an explicit backend's key is missing, fall back to DuckDuckGo with
+    a warning.
 
     Returns:
         SearchBackend enum value.
     """
-    has_anysearch = bool(os.environ.get("ANYSEARCH_API_KEY"))
-    has_zai = bool(os.environ.get("ZAI_API_KEY"))
+    # Resolve effective API keys (env > yaml)
+    anysearch_key = os.environ.get("ANYSEARCH_API_KEY") or (
+        _config.anysearch_api_key if _config else None
+    )
+    zai_key = os.environ.get("ZAI_API_KEY") or (
+        _config.zai_api_key if _config else None
+    )
 
-    if has_anysearch and has_zai:
-        # Both configured, check explicit preference
-        preference = os.environ.get("WEB_SEARCH_BACKEND", "").lower()
+    # Resolve explicit backend preference (env > yaml)
+    preference = os.environ.get("WEB_SEARCH_BACKEND", "").lower().strip()
+    if not preference and _config and _config.backend:
+        preference = _config.backend.lower().strip()
+
+    if preference:
+        if preference == "duckduckgo":
+            return SearchBackend.DUCKDUCKGO
+        if preference == "anysearch":
+            if anysearch_key:
+                return SearchBackend.ANYSEARCH
+            print(
+                "⚠ web_search.backend=anysearch but no API key available; "
+                "falling back to DuckDuckGo"
+            )
+            return SearchBackend.DUCKDUCKGO
         if preference == "zai":
-            return SearchBackend.ZAI
-        return SearchBackend.ANYSEARCH  # default to AnySearch
-    elif has_anysearch:
+            if zai_key:
+                return SearchBackend.ZAI
+            print(
+                "⚠ web_search.backend=zai but no API key available; "
+                "falling back to DuckDuckGo"
+            )
+            return SearchBackend.DUCKDUCKGO
+
+    # No explicit preference: auto-select based on available keys
+    if anysearch_key and zai_key:
+        return SearchBackend.ANYSEARCH  # default to AnySearch when both available
+    if anysearch_key:
         return SearchBackend.ANYSEARCH
-    elif has_zai:
+    if zai_key:
         return SearchBackend.ZAI
-    else:
-        return SearchBackend.DUCKDUCKGO
+    return SearchBackend.DUCKDUCKGO
 
 
 class DuckDuckGoBackend(SearchBackendBase):
@@ -153,7 +200,9 @@ class AnySearchBackend(SearchBackendBase):
         Returns:
             List of SearchResult objects.
         """
-        api_key = os.environ.get("ANYSEARCH_API_KEY", "")
+        api_key = os.environ.get("ANYSEARCH_API_KEY") or (
+            _config.anysearch_api_key if _config else None
+        ) or ""
         if not api_key:
             return []
 
@@ -203,7 +252,9 @@ class ZAIBackend(SearchBackendBase):
         Returns:
             List of SearchResult objects.
         """
-        api_key = os.environ.get("ZAI_API_KEY", "")
+        api_key = os.environ.get("ZAI_API_KEY") or (
+            _config.zai_api_key if _config else None
+        ) or ""
         if not api_key:
             return []
 

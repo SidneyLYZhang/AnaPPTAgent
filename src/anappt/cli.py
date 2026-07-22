@@ -15,7 +15,7 @@ from anappt.io.config import ReportConfig
 from anappt.io.git_auto import GitAutoCommit
 from anappt.io.session import SessionLogger
 from anappt.io.state import StateManager
-from anappt.llm.provider import AnaPPTLLM, load_global_config, merge_config, save_global_config
+from anappt.llm.provider import AnaPPTLLM, load_global_config, save_global_config
 from anappt.orchestrator import Orchestrator
 from anappt.project import create_project, is_anappt_project
 from anappt.stage_base import StageBase
@@ -169,16 +169,21 @@ def _load_pipeline_context(
     # Load config
     config = ReportConfig.from_yaml(report_yaml_path)
 
-    # Load models config
-    global_config = load_global_config()
+    # Load models config (global only — project-level models.yaml is no longer read)
+    models_config = load_global_config()
+
+    # Warn if a stale project-level models.yaml exists (no longer read)
     project_models_path = project_dir / ".anappt" / "models.yaml"
     if project_models_path.exists():
-        from anappt.io.config import ModelsConfig
+        print(t("cli.config.project_models_ignored", path=str(project_models_path)))
 
-        project_config = ModelsConfig.from_yaml(project_models_path)
-        models_config = merge_config(global_config, project_config)
-    else:
-        models_config = global_config
+    # Inject web tool config (env vars still take precedence inside the modules)
+    try:
+        from anappt.tools import web_fetch, web_search
+        web_search.configure_from_models_config(models_config)
+        web_fetch.configure_from_models_config(models_config)
+    except Exception as e:
+        print(f"⚠ web 工具配置初始化失败(将回退到环境变量): {e}")
 
     # Create LLM provider
     llm = AnaPPTLLM(models_config)
@@ -422,6 +427,34 @@ def cmd_status(args: list[str]) -> int:
     return 0
 
 
+def _parse_thinking_raw(raw: str) -> str | int | None:
+    """Parse the ``thinking`` value entered interactively by the user.
+
+    - Empty input → ``None`` (use the model's maximum thinking effort).
+    - ``FALSE`` / ``OFF`` (case-insensitive) → the string ``"FALSE"`` (the
+      canonical disable sentinel stored in models.yaml).
+    - Pure-digit input (e.g. ``8000``) → ``int`` (used as budget_tokens).
+    - Anything else (e.g. ``low``/``medium``/``high``) → the lowercased
+      string, kept as-is for provider-specific mapping.
+
+    Args:
+        raw: The raw user input string (already stripped of surrounding
+            whitespace by the caller, but stripped again defensively).
+
+    Returns:
+        Parsed thinking value (``None``, ``"FALSE"``, an int, or a str).
+    """
+    raw = raw.strip()
+    if not raw:
+        return None
+    upper = raw.upper()
+    if upper in ("FALSE", "OFF"):
+        return "FALSE"
+    if raw.isdigit():
+        return int(raw)
+    return raw.lower()
+
+
 def cmd_config(args: list[str]) -> int:
     """Handle the 'config' command.
 
@@ -433,13 +466,25 @@ def cmd_config(args: list[str]) -> int:
     """
     if not args or args[0] == "show":
         config = load_global_config()
+        # Inject web tool config so is_available() reflects effective config
+        try:
+            from anappt.tools import web_fetch, web_search
+            web_search.configure_from_models_config(config)
+            web_fetch.configure_from_models_config(config)
+        except Exception as e:
+            print(f"⚠ web 工具配置初始化失败(将回退到环境变量): {e}")
         print(t("cli.config_show"))
-        print(config.to_yaml())
+        print(config.to_effective_yaml())
         return 0
 
     if args[0] == "set":
         # Interactive config setup
-        from anappt.io.config import ModelRoleConfig, ModelsConfig
+        from anappt.io.config import (
+            ModelRoleConfig,
+            ModelsConfig,
+            WebFetchConfig,
+            WebSearchConfig,
+        )
 
         print(t("cli.config_prompt"))
         roles = ["reasoning", "analysis", "writing"]
@@ -451,16 +496,48 @@ def cmd_config(args: list[str]) -> int:
             model = input(f"  Model name [{role}]: ").strip()
             api_base = input(f"  API base (optional) [{role}]: ").strip()
             api_key = input(f"  API key (use ${{VAR}} for env var) [{role}]: ").strip()
+            thinking_raw = input(
+                f"  Thinking (Enter=max, FALSE=off, low/medium/high or integer) [{role}]: "
+            ).strip()
+            thinking = _parse_thinking_raw(thinking_raw)
 
             role_config = ModelRoleConfig(
                 provider=provider,
                 model=model,
                 api_base=api_base if api_base else None,
                 api_key=api_key if api_key else None,
+                thinking=thinking,
             )
             setattr(new_config, role, role_config)
 
+        # web_search 配置(可选)
+        print("\n--- web_search ---")
+        ws_backend = input("  Backend (duckduckgo/anysearch/zai, Enter=auto): ").strip() or None
+        ws_anysearch = input("  AnySearch API key (optional, use ${VAR} for env): ").strip() or None
+        ws_zai = input("  z.ai API key (optional, use ${VAR} for env): ").strip() or None
+
+        # web_fetch 配置(可选)
+        print("\n--- web_fetch ---")
+        wf_jina = (
+            input("  Jina API key (optional, use ${VAR} for env, Enter=disable): ").strip()
+            or None
+        )
+
+        new_config.web_search = WebSearchConfig(
+            backend=ws_backend,
+            anysearch_api_key=ws_anysearch,
+            zai_api_key=ws_zai,
+        )
+        new_config.web_fetch = WebFetchConfig(jina_api_key=wf_jina)
+
         saved_path = save_global_config(new_config)
+        # Inject web tool config so subsequent is_available() reflects new config
+        try:
+            from anappt.tools import web_fetch, web_search
+            web_search.configure_from_models_config(new_config)
+            web_fetch.configure_from_models_config(new_config)
+        except Exception as e:
+            print(f"⚠ web 工具配置初始化失败(将回退到环境变量): {e}")
         print(t("cli.config_saved", path=str(saved_path)))
         return 0
 

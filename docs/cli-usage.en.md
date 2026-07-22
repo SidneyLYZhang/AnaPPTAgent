@@ -18,31 +18,57 @@ The CLI entry point is `anappt`, supporting the following subcommands:
 | `anappt run` | Start or resume the pipeline |
 | `anappt resume` | Resume the pipeline from current state |
 | `anappt status` | Show all stage statuses |
-| `anappt config show` | Display current model configuration |
-| `anappt config set` | Interactively configure models |
+| `anappt config show` | Display the full effective configuration (incl. thinking, web search/fetch, API key masked, sources annotated) |
+| `anappt config set` | Interactively configure three model roles (incl. thinking) and web_search/web_fetch |
 | `anappt interactive` | Start interactive mode |
 | `anappt setup [--dir <path>] [--registry <url>]` | Check environment and install/update dashi-ppt-skill |
 
 ## Global Config File
 
-The global model config file is located at `~/.anappt/models.yaml` and defines three model roles:
+!!! info "Full configuration guide"
+    See [Configuration Guide](configuration.en.md).
+
+The global model config file is located at `~/.anappt/models.yaml` (**all configuration lives here; project-level overrides are no longer supported**) and defines three model roles plus optional web capabilities:
 
 ```yaml
 reasoning:
   provider: openai
   model: gpt-4o
   api_key: ${OPENAI_API_KEY}
+  # thinking omitted → use the model's maximum thinking effort
 
 analysis:
-  provider: openai
-  model: gpt-4o
-  api_key: ${OPENAI_API_KEY}
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+  api_key: ${ANTHROPIC_API_KEY}
+  thinking: FALSE              # explicitly disable thinking
 
 writing:
   provider: openai
   model: gpt-4o
   api_key: ${OPENAI_API_KEY}
+  # thinking omitted → use the model's maximum thinking effort
+
+# Web search (optional section; defaults to DuckDuckGo, no key required)
+web_search:
+  backend: anysearch                       # optional: duckduckgo | anysearch | zai
+  anysearch_api_key: ${ANYSEARCH_API_KEY}  # optional; env var takes precedence over yaml
+  zai_api_key: ${ZAI_API_KEY}              # optional; env var takes precedence over yaml
+
+# Web fetch (optional section; disabled by default)
+web_fetch:
+  jina_api_key: ${JINA_API_KEY}            # optional; env var takes precedence over yaml
 ```
+
+**Field notes**:
+
+- `thinking` (optional): controls the reasoning effort for that role when calling the LLM.
+  - Omitted → use the model's maximum thinking effort (for known providers an explicit "max" param is sent, e.g. OpenAI o-series `reasoning_effort="high"`).
+  - String `FALSE` (case-insensitive; also accepts `False`/`false`/`OFF`/`off`) → disable thinking.
+  - `low`/`medium`/`high` → call with the specified effort (e.g. OpenAI maps to `reasoning_effort`).
+  - Integer N → passed as `budget_tokens` to providers that support it (e.g. Anthropic).
+- `web_search` / `web_fetch` are optional sections; when omitted, web search defaults to DuckDuckGo (no key) and web fetch is disabled.
+- **Environment variables take precedence over the corresponding fields in models.yaml**: when both an environment variable and a yaml field configure the same item, the environment variable wins.
 
 | Role | Stages | Purpose |
 |------|--------|---------|
@@ -98,14 +124,16 @@ delivery:
 | `OPENAI_API_KEY` | OpenAI API key |
 | `ANTHROPIC_API_KEY` | Anthropic API key |
 | `DEEPSEEK_API_KEY` | DeepSeek API key |
-| `ANYSEARCH_API_KEY` | AnySearch web search backend key |
-| `ZAI_API_KEY` | z.ai (Zhipu) web search backend key |
-| `WEB_SEARCH_BACKEND` | Only effective when both `ANYSEARCH_API_KEY` and `ZAI_API_KEY` are present; set to `zai` to switch to the z.ai backend; defaults to AnySearch. When no key is set, DuckDuckGo is always used |
-| `JINA_API_KEY` | Jina Reader API key for web page reading |
+| `ANYSEARCH_API_KEY` | AnySearch web search backend key. **Takes precedence over `web_search.anysearch_api_key` in models.yaml**; when neither is set, anappt falls back to DuckDuckGo |
+| `ZAI_API_KEY` | z.ai (Zhipu) web search backend key. **Takes precedence over `web_search.zai_api_key` in models.yaml** |
+| `WEB_SEARCH_BACKEND` | Explicitly selects the search backend, one of `duckduckgo` / `anysearch` / `zai`. **Takes precedence over `web_search.backend` in models.yaml**; when unset, the backend is auto-selected based on available keys; when no key is present, DuckDuckGo is always used |
+| `JINA_API_KEY` | Jina Reader API key for web page reading. **Takes precedence over `web_fetch.jina_api_key` in models.yaml**; when neither is set, web fetch is disabled |
 | `HTTP_PROXY` | HTTP proxy address |
 | `HTTPS_PROXY` | HTTPS proxy address |
 | `ALL_PROXY` | Global proxy address (supports socks5) |
 | `LANG` | Language selection: `zh_CN.UTF-8` (default) or `en_US.UTF-8` |
+
+> **Precedence note**: For web search and web fetch, anappt follows a uniform **environment variable > models.yaml > default** precedence. When an environment variable is not set, anappt falls back to models.yaml; when neither is configured, the defaults apply (DuckDuckGo search / web fetch disabled).
 
 ## Command Examples
 
@@ -202,7 +230,9 @@ anappt config show
 anappt config set
 ```
 
-`config set` guides the user through configuring the provider, model, api_base (optional), and api_key for each of the three model roles: reasoning, analysis, and writing.
+`config show` prints the current **effective configuration** (the merged result of env > yaml > defaults), including the three roles (with the `thinking` field), the `web_search` section (effective backend and whether each key is configured), and the `web_fetch` section (whether `jina_api_key` is configured). All `api_key` / `*_api_key` fields are masked (`${VAR}` literals are shown as-is, actual values are shown as `****<last 4>`, empty values as `<unset>`), and each field is annotated with its source (`(env)` / `(yaml)` / `(default)`).
+
+`config set` guides the user through configuring the provider, model, api_base (optional), api_key, and `thinking` (optional; press Enter to skip and keep the default maximum thinking effort) for each of the three model roles: reasoning, analysis, and writing. After the three roles are configured, it asks whether to configure the `web_search` and `web_fetch` sections (all can be skipped to keep the defaults). The result is written to `~/.anappt/models.yaml` (**no** `models.yaml` is ever created in the project directory).
 
 ### Install dashi-ppt-skill
 

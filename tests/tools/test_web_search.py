@@ -4,12 +4,14 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
+from anappt.io.config import ModelsConfig, WebSearchConfig
 from anappt.tools.web_search import (
     AnySearchBackend,
     DuckDuckGoBackend,
     SearchBackend,
     SearchResult,
     ZAIBackend,
+    configure_from_models_config,
     get_backend,
     get_backend_instance,
     search_web,
@@ -18,9 +20,11 @@ from anappt.tools.web_search import (
 
 @pytest.fixture(autouse=True)
 def clean_env(monkeypatch):
-    """Remove all API key env vars before each test."""
+    """Remove all API key env vars and reset _config before each test."""
     for key in ["ANYSEARCH_API_KEY", "ZAI_API_KEY", "WEB_SEARCH_BACKEND"]:
         monkeypatch.delenv(key, raising=False)
+    # Reset module-level _config to avoid leakage between tests
+    monkeypatch.setattr("anappt.tools.web_search._config", None)
 
 
 class TestSearchResult:
@@ -276,3 +280,131 @@ class TestSearchWeb:
             results = search_web("test query")
             assert len(results) == 1
             assert results[0].title == "Test"
+
+
+class TestConfigPrecedence:
+    """Test config precedence (env > yaml > default) for web_search."""
+
+    def test_env_key_overrides_yaml(self, monkeypatch):
+        """Env ANYSEARCH_API_KEY overrides yaml anysearch_api_key.
+
+        get_backend() returns ANYSEARCH, and AnySearchBackend.search uses
+        the env key (not the yaml key).
+        """
+        monkeypatch.setenv("ANYSEARCH_API_KEY", "env-key")
+        monkeypatch.setattr(
+            "anappt.tools.web_search._config",
+            WebSearchConfig(anysearch_api_key="yaml-key"),
+        )
+        assert get_backend() == SearchBackend.ANYSEARCH
+
+    @patch("anappt.tools.web_search.httpx.Client")
+    def test_env_key_overrides_yaml_in_search(self, mock_client_cls, monkeypatch):
+        """AnySearchBackend.search uses env key when both env and yaml are set."""
+        monkeypatch.setenv("ANYSEARCH_API_KEY", "env-key")
+        monkeypatch.setattr(
+            "anappt.tools.web_search._config",
+            WebSearchConfig(anysearch_api_key="yaml-key"),
+        )
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"results": []}
+        mock_response.raise_for_status.return_value = None
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=None)
+        mock_client.post.return_value = mock_response
+        mock_client_cls.return_value = mock_client
+
+        backend = AnySearchBackend()
+        backend.search("test query")
+
+        call_kwargs = mock_client.post.call_args
+        assert call_kwargs.kwargs["headers"]["Authorization"] == "Bearer env-key"
+
+    def test_yaml_key_when_no_env(self, monkeypatch):
+        """Yaml anysearch_api_key used when env not set."""
+        monkeypatch.setattr(
+            "anappt.tools.web_search._config",
+            WebSearchConfig(anysearch_api_key="yaml-key"),
+        )
+        assert get_backend() == SearchBackend.ANYSEARCH
+
+    @patch("anappt.tools.web_search.httpx.Client")
+    def test_yaml_key_used_in_search_when_no_env(self, mock_client_cls, monkeypatch):
+        """AnySearchBackend.search falls back to yaml key when env not set."""
+        monkeypatch.setattr(
+            "anappt.tools.web_search._config",
+            WebSearchConfig(anysearch_api_key="yaml-key"),
+        )
+        mock_response = MagicMock()
+        mock_response.json.return_value = {"results": []}
+        mock_response.raise_for_status.return_value = None
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=None)
+        mock_client.post.return_value = mock_response
+        mock_client_cls.return_value = mock_client
+
+        backend = AnySearchBackend()
+        backend.search("test query")
+
+        call_kwargs = mock_client.post.call_args
+        assert call_kwargs.kwargs["headers"]["Authorization"] == "Bearer yaml-key"
+
+    def test_explicit_backend_duckduckgo_ignores_keys(self, monkeypatch):
+        """Explicit yaml backend=duckduckgo ignores available keys."""
+        monkeypatch.setattr(
+            "anappt.tools.web_search._config",
+            WebSearchConfig(backend="duckduckgo", anysearch_api_key="yaml-key"),
+        )
+        assert get_backend() == SearchBackend.DUCKDUCKGO
+
+    def test_explicit_backend_anysearch_no_key_falls_back(self, monkeypatch):
+        """Explicit yaml backend=anysearch without key falls back to duckduckgo."""
+        monkeypatch.setattr(
+            "anappt.tools.web_search._config",
+            WebSearchConfig(backend="anysearch"),
+        )
+        assert get_backend() == SearchBackend.DUCKDUCKGO
+
+    def test_explicit_backend_zai_no_key_falls_back(self, monkeypatch):
+        """Explicit yaml backend=zai without key falls back to duckduckgo."""
+        monkeypatch.setattr(
+            "anappt.tools.web_search._config",
+            WebSearchConfig(backend="zai"),
+        )
+        assert get_backend() == SearchBackend.DUCKDUCKGO
+
+    def test_explicit_backend_env_overrides_yaml(self, monkeypatch):
+        """Env WEB_SEARCH_BACKEND overrides yaml backend.
+
+        env WEB_SEARCH_BACKEND=zai + yaml backend=anysearch + both keys
+        available (via yaml) → get_backend() returns ZAI.
+        """
+        monkeypatch.setenv("WEB_SEARCH_BACKEND", "zai")
+        monkeypatch.setattr(
+            "anappt.tools.web_search._config",
+            WebSearchConfig(
+                backend="anysearch",
+                anysearch_api_key="any-yaml",
+                zai_api_key="zai-yaml",
+            ),
+        )
+        assert get_backend() == SearchBackend.ZAI
+
+    def test_no_config_no_env_defaults_duckduckgo(self, monkeypatch):
+        """No injected _config and no env vars defaults to duckduckgo."""
+        monkeypatch.setattr("anappt.tools.web_search._config", None)
+        assert get_backend() == SearchBackend.DUCKDUCKGO
+
+    def test_configure_from_models_config_injects(self, monkeypatch):
+        """configure_from_models_config injects the web_search section."""
+        models_config = ModelsConfig(
+            web_search=WebSearchConfig(backend="anysearch", anysearch_api_key="k"),
+        )
+        configure_from_models_config(models_config)
+        import anappt.tools.web_search as ws
+
+        assert ws._config is not None
+        assert ws._config.backend == "anysearch"
+        assert ws._config.anysearch_api_key == "k"

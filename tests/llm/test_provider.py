@@ -1,14 +1,19 @@
 """Tests for the LLM provider module."""
 
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-from anappt.io.config import ModelRoleConfig, ModelsConfig
+from anappt.io.config import (
+    ModelRoleConfig,
+    ModelsConfig,
+    WebFetchConfig,
+    WebSearchConfig,
+)
 from anappt.llm.provider import (
     AnaPPTLLM,
     load_global_config,
-    merge_config,
     save_global_config,
 )
 
@@ -191,6 +196,121 @@ class TestChatWithTools:
         assert call_kwargs.kwargs["tools"] == tools
 
 
+class TestThinkingMapping:
+    """Test the ``thinking`` config field to LiteLLM params mapping."""
+
+    def _make_llm(self, provider: str, thinking: str | int | bool | None) -> AnaPPTLLM:
+        """Build an AnaPPTLLM whose reasoning role uses the given provider/thinking."""
+        config = ModelsConfig(
+            reasoning=ModelRoleConfig(
+                provider=provider,
+                model="test-model",
+                api_key="test-key",
+                thinking=thinking,
+            )
+        )
+        return AnaPPTLLM(config)
+
+    def _mock_completion(self, mock_litellm: Any) -> None:
+        """Wire a minimal mock response into the patched litellm module."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "ok"
+        mock_litellm.completion.return_value = mock_response
+
+    @patch("anappt.llm.provider.litellm")
+    def test_thinking_none_openai_passes_high(self, mock_litellm):
+        llm = self._make_llm("openai", None)
+        self._mock_completion(mock_litellm)
+
+        llm.chat("reasoning", [{"role": "user", "content": "hi"}])
+        call_kwargs = mock_litellm.completion.call_args.kwargs
+        assert call_kwargs["reasoning_effort"] == "high"
+
+    @patch("anappt.llm.provider.litellm")
+    def test_thinking_none_anthropic_passes_nothing(self, mock_litellm):
+        llm = self._make_llm("anthropic", None)
+        self._mock_completion(mock_litellm)
+
+        llm.chat("reasoning", [{"role": "user", "content": "hi"}])
+        call_kwargs = mock_litellm.completion.call_args.kwargs
+        assert "reasoning_effort" not in call_kwargs
+        assert "thinking" not in call_kwargs
+
+    @patch("anappt.llm.provider.litellm")
+    def test_thinking_false_openai_passes_minimal(self, mock_litellm):
+        llm = self._make_llm("openai", "FALSE")
+        self._mock_completion(mock_litellm)
+
+        llm.chat("reasoning", [{"role": "user", "content": "hi"}])
+        call_kwargs = mock_litellm.completion.call_args.kwargs
+        assert call_kwargs["reasoning_effort"] == "minimal"
+
+    @patch("anappt.llm.provider.litellm")
+    def test_thinking_false_case_insensitive(self, mock_litellm):
+        llm = self._make_llm("openai", "off")
+        self._mock_completion(mock_litellm)
+
+        llm.chat("reasoning", [{"role": "user", "content": "hi"}])
+        call_kwargs = mock_litellm.completion.call_args.kwargs
+        assert call_kwargs["reasoning_effort"] == "minimal"
+
+    @patch("anappt.llm.provider.litellm")
+    def test_thinking_high_openai(self, mock_litellm):
+        llm = self._make_llm("openai", "high")
+        self._mock_completion(mock_litellm)
+
+        llm.chat("reasoning", [{"role": "user", "content": "hi"}])
+        call_kwargs = mock_litellm.completion.call_args.kwargs
+        assert call_kwargs["reasoning_effort"] == "high"
+
+    @patch("anappt.llm.provider.litellm")
+    def test_thinking_medium_openai(self, mock_litellm):
+        llm = self._make_llm("openai", "medium")
+        self._mock_completion(mock_litellm)
+
+        llm.chat("reasoning", [{"role": "user", "content": "hi"}])
+        call_kwargs = mock_litellm.completion.call_args.kwargs
+        assert call_kwargs["reasoning_effort"] == "medium"
+
+    @patch("anappt.llm.provider.litellm")
+    def test_thinking_int_anthropic(self, mock_litellm):
+        llm = self._make_llm("anthropic", 8000)
+        self._mock_completion(mock_litellm)
+
+        llm.chat("reasoning", [{"role": "user", "content": "hi"}])
+        call_kwargs = mock_litellm.completion.call_args.kwargs
+        assert call_kwargs["thinking"] == {"type": "enabled", "budget_tokens": 8000}
+
+    @patch("anappt.llm.provider.litellm")
+    def test_thinking_int_openai_ignored(self, mock_litellm):
+        llm = self._make_llm("openai", 8000)
+        self._mock_completion(mock_litellm)
+
+        llm.chat("reasoning", [{"role": "user", "content": "hi"}])
+        call_kwargs = mock_litellm.completion.call_args.kwargs
+        assert "thinking" not in call_kwargs
+        assert "reasoning_effort" not in call_kwargs
+
+    @patch("anappt.llm.provider.litellm")
+    def test_thinking_false_anthropic_no_thinking(self, mock_litellm):
+        llm = self._make_llm("anthropic", "FALSE")
+        self._mock_completion(mock_litellm)
+
+        llm.chat("reasoning", [{"role": "user", "content": "hi"}])
+        call_kwargs = mock_litellm.completion.call_args.kwargs
+        assert "thinking" not in call_kwargs
+
+    @patch("anappt.llm.provider.litellm")
+    def test_caller_kwargs_override_thinking(self, mock_litellm):
+        llm = self._make_llm("openai", None)
+        self._mock_completion(mock_litellm)
+
+        llm.chat("reasoning", [{"role": "user", "content": "hi"}], reasoning_effort="low")
+        call_kwargs = mock_litellm.completion.call_args.kwargs
+        assert call_kwargs["reasoning_effort"] == "low"
+
+
 class TestGlobalConfig:
     """Test global configuration management."""
 
@@ -220,60 +340,56 @@ class TestGlobalConfig:
         assert config.reasoning.model == "deepseek-reasoner"
         assert config.reasoning.api_key == "test-key"
 
-    def test_merge_config_project_overrides_global(self):
-        global_config = ModelsConfig(
-            reasoning=ModelRoleConfig(provider="openai", model="gpt-4", api_key="global-key"),
-            analysis=ModelRoleConfig(provider="openai", model="gpt-4o"),
-            writing=ModelRoleConfig(provider="anthropic", model="claude"),
+    def test_load_global_config_with_thinking_and_web(self, monkeypatch, tmp_path):
+        """load_global_config parses thinking and web_search/web_fetch sections."""
+        anappt_dir = tmp_path / ".anappt"
+        anappt_dir.mkdir()
+        models_yaml = anappt_dir / "models.yaml"
+        models_yaml.write_text(
+            "reasoning:\n"
+            "  provider: openai\n"
+            "  model: o1\n"
+            "  thinking: FALSE\n"
+            "web_search:\n"
+            "  backend: anysearch\n"
+            "  anysearch_api_key: any-key\n"
+            "web_fetch:\n"
+            "  jina_api_key: test-jina\n",
+            encoding="utf-8",
         )
-        project_config = ModelsConfig(
-            reasoning=ModelRoleConfig(provider="deepseek", model="deepseek-reasoner"),
-        )
+        monkeypatch.setattr("anappt.llm.provider.Path.home", lambda: tmp_path)
 
-        merged = merge_config(global_config, project_config)
-        assert merged.reasoning.model == "deepseek-reasoner"
-        assert merged.reasoning.provider == "deepseek"
-        # Non-overridden roles keep global values
-        assert merged.analysis.model == "gpt-4o"
-        assert merged.writing.model == "claude"
-
-    def test_merge_config_partial_override(self):
-        global_config = ModelsConfig(
-            reasoning=ModelRoleConfig(provider="openai", model="gpt-4", api_key="key1"),
-        )
-        project_config = ModelsConfig(
-            reasoning=ModelRoleConfig(model="gpt-4o"),  # only override model
-        )
-
-        merged = merge_config(global_config, project_config)
-        assert merged.reasoning.model == "gpt-4o"
-        assert merged.reasoning.provider == "openai"  # from global
-        assert merged.reasoning.api_key == "key1"  # from global
-
-    def test_merge_config_none_project(self):
-        global_config = ModelsConfig(
-            reasoning=ModelRoleConfig(model="gpt-4"),
-        )
-        merged = merge_config(global_config, None)
-        assert merged.reasoning.model == "gpt-4"
+        config = load_global_config()
+        assert config.reasoning.thinking is False
+        assert config.web_search.backend == "anysearch"
+        assert config.web_search.anysearch_api_key == "any-key"
+        assert config.web_fetch.jina_api_key == "test-jina"
 
     def test_save_global_config(self, monkeypatch, tmp_path):
         monkeypatch.setattr("anappt.llm.provider.Path.home", lambda: tmp_path)
 
         config = ModelsConfig(
             reasoning=ModelRoleConfig(
-                provider="deepseek", model="deepseek-reasoner", api_key="key"
+                provider="deepseek",
+                model="deepseek-reasoner",
+                api_key="key",
+                thinking="high",
             ),
+            web_search=WebSearchConfig(backend="zai"),
+            web_fetch=WebFetchConfig(jina_api_key="jk"),
         )
         saved_path = save_global_config(config)
 
         assert saved_path.exists()
         assert saved_path == tmp_path / ".anappt" / "models.yaml"
 
-        # Verify it can be loaded back
+        # Verify it can be loaded back (thinking + web sections roundtrip)
         loaded = load_global_config()
         assert loaded.reasoning.model == "deepseek-reasoner"
         assert loaded.reasoning.api_key == "key"
+        assert loaded.reasoning.thinking == "high"
+        assert loaded.web_search.backend == "zai"
+        assert loaded.web_fetch.jina_api_key == "jk"
 
     def test_save_global_config_creates_directory(self, monkeypatch, tmp_path):
         monkeypatch.setattr("anappt.llm.provider.Path.home", lambda: tmp_path)

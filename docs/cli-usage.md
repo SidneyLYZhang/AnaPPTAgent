@@ -18,31 +18,57 @@ AnaPPTAgent 的 CLI 入口为 `anappt`，支持以下子命令：
 | `anappt run` | 启动或恢复流水线 |
 | `anappt resume` | 从当前状态恢复流水线 |
 | `anappt status` | 显示所有阶段状态 |
-| `anappt config show` | 显示当前模型配置 |
-| `anappt config set` | 交互式配置模型 |
+| `anappt config show` | 显示当前完整有效配置（含 thinking、web 搜索/读取，API key 掩码，标注来源） |
+| `anappt config set` | 交互式配置三个模型角色（含 thinking）与 web_search/web_fetch 能力 |
 | `anappt interactive` | 启动交互模式 |
 | `anappt setup [--dir <path>] [--registry <url>]` | 检查环境并安装/更新 dashi-ppt-skill |
 
 ## 全局配置文件
 
-全局模型配置文件位于 `~/.anappt/models.yaml`，定义三种模型角色：
+!!! info "完整配置指引"
+    详见 [配置指引](configuration.md)。
+
+全局模型配置文件位于 `~/.anappt/models.yaml`（**所有配置集中在此文件,不再支持项目级覆盖**），定义三种模型角色与可选的 web 能力：
 
 ```yaml
 reasoning:
   provider: openai
   model: gpt-4o
   api_key: ${OPENAI_API_KEY}
+  # thinking 缺省 → 使用模型最大思考强度
 
 analysis:
-  provider: openai
-  model: gpt-4o
-  api_key: ${OPENAI_API_KEY}
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+  api_key: ${ANTHROPIC_API_KEY}
+  thinking: FALSE              # 显式关闭思考
 
 writing:
   provider: openai
   model: gpt-4o
   api_key: ${OPENAI_API_KEY}
+  # thinking 缺省 → 使用模型最大思考强度
+
+# Web 搜索（可选段,缺省使用 DuckDuckGo,无需 key）
+web_search:
+  backend: anysearch                       # 可选: duckduckgo | anysearch | zai
+  anysearch_api_key: ${ANYSEARCH_API_KEY}  # 可选,环境变量优先于 yaml
+  zai_api_key: ${ZAI_API_KEY}              # 可选,环境变量优先于 yaml
+
+# Web 读取（可选段,缺省禁用）
+web_fetch:
+  jina_api_key: ${JINA_API_KEY}            # 可选,环境变量优先于 yaml
 ```
+
+**字段说明**：
+
+- `thinking`（可选）：控制该角色调用 LLM 时的思考强度。
+  - 字段缺省 → 使用模型最大思考强度（对已知 provider 主动传"最大"参数,如 OpenAI o-series 的 `reasoning_effort="high"`）
+  - 字符串 `FALSE`（大小写不敏感,也接受 `False`/`false`/`OFF`/`off`）→ 关闭思考
+  - `low`/`medium`/`high` → 按指定强度调用（如 OpenAI 映射为 `reasoning_effort`）
+  - 整数 N → 作为 `budget_tokens` 传递给支持的 provider（如 Anthropic）
+- `web_search` / `web_fetch` 为可选段,缺省时：Web 搜索使用 DuckDuckGo（无需 key）,Web 读取禁用。
+- **环境变量优先于 models.yaml 中的对应字段**：当环境变量与 yaml 同时配置同一项时,以环境变量的值为准。
 
 | 角色 | 阶段 | 用途 |
 |------|------|------|
@@ -98,14 +124,16 @@ delivery:
 | `OPENAI_API_KEY` | OpenAI API 密钥 |
 | `ANTHROPIC_API_KEY` | Anthropic API 密钥 |
 | `DEEPSEEK_API_KEY` | DeepSeek API 密钥 |
-| `ANYSEARCH_API_KEY` | AnySearch Web 搜索后端密钥 |
-| `ZAI_API_KEY` | z.ai（智谱）Web 搜索后端密钥 |
-| `WEB_SEARCH_BACKEND` | 当 `ANYSEARCH_API_KEY` 与 `ZAI_API_KEY` 同时存在时生效，设为 `zai` 切换到 z.ai 后端；默认走 AnySearch。无任何 key 时始终使用 DuckDuckGo |
-| `JINA_API_KEY` | Jina Reader API 密钥，用于网页读取 |
+| `ANYSEARCH_API_KEY` | AnySearch Web 搜索后端密钥。**环境变量优先于 models.yaml 中的 `web_search.anysearch_api_key`**；两者均未配置时回退 DuckDuckGo |
+| `ZAI_API_KEY` | z.ai（智谱）Web 搜索后端密钥。**环境变量优先于 models.yaml 中的 `web_search.zai_api_key`** |
+| `WEB_SEARCH_BACKEND` | 显式指定搜索后端,取值 `duckduckgo` / `anysearch` / `zai`。**环境变量优先于 models.yaml 中的 `web_search.backend`**；未配置时基于可用 key 自动选择；无任何 key 时始终使用 DuckDuckGo |
+| `JINA_API_KEY` | Jina Reader API 密钥,用于网页读取。**环境变量优先于 models.yaml 中的 `web_fetch.jina_api_key`**；两者均未配置时 web 读取禁用 |
 | `HTTP_PROXY` | HTTP 代理地址 |
 | `HTTPS_PROXY` | HTTPS 代理地址 |
 | `ALL_PROXY` | 全局代理地址（支持 socks5） |
 | `LANG` | 语言选择：`zh_CN.UTF-8`（默认）或 `en_US.UTF-8` |
+
+> **优先级提示**：对于 web 搜索与 web 读取,统一遵循 **环境变量 > models.yaml > 默认值** 的优先级。未设置环境变量时回退到 models.yaml,两者均未配置时使用默认值（DuckDuckGo 搜索 / 禁用 web 读取）。
 
 ## 命令示例
 
@@ -202,7 +230,9 @@ anappt config show
 anappt config set
 ```
 
-`config set` 会引导用户逐一配置 reasoning、analysis、writing 三种模型角色的 provider、model、api_base（可选）和 api_key。
+`config show` 显示当前**有效配置**（env > yaml > 默认值的合并结果），包含三个角色（含 `thinking` 字段）、`web_search` 段（有效 backend 与各 key 是否已配置）、`web_fetch` 段（jina_api_key 是否已配置）。所有 `api_key`/`*_api_key` 字段做掩码（`${VAR}` 字面量原样显示,实际值显示 `****<末4位>`,空值显示 `<unset>`），并在字段后标注来源（`(env)` / `(yaml)` / `(default)`）。
+
+`config set` 会引导用户逐一配置 reasoning、analysis、writing 三种模型角色的 provider、model、api_base（可选）、api_key 与 `thinking`（可选,直接回车跳过 = 缺省最大思考）；并在三角色配置完成后询问是否配置 `web_search` 与 `web_fetch` 段（可全部跳过以保持默认）。配置写入 `~/.anappt/models.yaml`（**不**在项目目录下生成任何 `models.yaml`）。
 
 ### 安装 dashi-ppt-skill
 

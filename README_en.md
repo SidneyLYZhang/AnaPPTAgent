@@ -93,24 +93,47 @@ uv run ruff check src tests   # Lint the source tree
 
 ### Global Model Config
 
-Create `~/.anappt/models.yaml`:
+Create `~/.anappt/models.yaml` (**all configuration lives here; project-level overrides are no longer supported**):
 
 ```yaml
 reasoning:
   provider: openai
   model: gpt-4o
   api_key: ${OPENAI_API_KEY}
+  # thinking omitted → use the model's maximum thinking effort
 
 analysis:
-  provider: openai
-  model: gpt-4o
-  api_key: ${OPENAI_API_KEY}
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+  api_key: ${ANTHROPIC_API_KEY}
+  thinking: FALSE              # explicitly disable thinking
 
 writing:
   provider: openai
   model: gpt-4o
   api_key: ${OPENAI_API_KEY}
+  # thinking omitted → use the model's maximum thinking effort
+
+# Web search (optional section; defaults to DuckDuckGo, no key required)
+web_search:
+  backend: anysearch                       # optional: duckduckgo | anysearch | zai
+  anysearch_api_key: ${ANYSEARCH_API_KEY}  # optional; env var takes precedence over yaml
+  zai_api_key: ${ZAI_API_KEY}              # optional; env var takes precedence over yaml
+
+# Web fetch (optional section; disabled by default)
+web_fetch:
+  jina_api_key: ${JINA_API_KEY}            # optional; env var takes precedence over yaml
 ```
+
+**Field notes**:
+
+- `thinking` (optional): controls the reasoning effort for that role when calling the LLM.
+  - Omitted → use the model's maximum thinking effort (for known providers an explicit "max" param is sent, e.g. OpenAI o-series `reasoning_effort="high"`).
+  - String `FALSE` (case-insensitive; also accepts `False`/`false`/`OFF`/`off`) → disable thinking.
+  - `low`/`medium`/`high` → call with the specified effort (e.g. OpenAI maps to `reasoning_effort`).
+  - Integer N → passed as `budget_tokens` to providers that support it (e.g. Anthropic).
+- `web_search` / `web_fetch` are optional sections; when omitted, web search defaults to DuckDuckGo (no key) and web fetch is disabled.
+- **Environment variables take precedence over the corresponding fields in models.yaml**: when both an environment variable and a yaml field configure the same item, the environment variable wins.
 
 Or use the interactive configurator:
 
@@ -143,6 +166,10 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 export DEEPSEEK_API_KEY="..."
 
 # Web search backends (optional, DuckDuckGo is the default)
+# Note: these environment variables take precedence over the
+# web_search/web_fetch fields in models.yaml; when the env vars are not
+# set, anappt falls back to models.yaml, and when neither is configured
+# the defaults apply (DuckDuckGo search / web fetch disabled).
 export ANYSEARCH_API_KEY="..."     # AnySearch backend
 export ZAI_API_KEY="..."            # z.ai (Zhipu) backend
 export WEB_SEARCH_BACKEND="anysearch"  # or "zai", "duckduckgo"
@@ -191,8 +218,8 @@ anappt run
 | `anappt run`                   | Start or resume the pipeline                      |
 | `anappt resume`                | Resume the pipeline from current state             |
 | `anappt status`                | Show all stage statuses                           |
-| `anappt config show`           | Display current model configuration                |
-| `anappt config set`            | Interactively configure models                    |
+| `anappt config show`           | Display the full effective configuration (incl. thinking, web search/fetch, API key masked, sources annotated) |
+| `anappt config set`            | Interactively configure three model roles (incl. thinking) and web_search/web_fetch |
 | `anappt interactive`           | Start interactive mode with command loop          |
 | `anappt setup`                | Install/initialize dashi-ppt skill and other resources |
 

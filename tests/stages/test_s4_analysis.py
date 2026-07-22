@@ -178,3 +178,82 @@ class TestS4ToolBuilding:
 
         assert "fetch_url" in tools
         assert any(td.name == "fetch_url" for td in tool_defs)
+
+
+class TestS4ProjectModelsYaml:
+    """Tests for project-level models.yaml handling (no longer read)."""
+
+    def test_s4_builds_tools_without_project_models_yaml(
+        self, ctx: PipelineContext, monkeypatch, tmp_path: Path
+    ) -> None:
+        """S4 _build_tools works without project-level or global models.yaml.
+
+        Simulates a fresh environment: no ``project_dir/.anappt/models.yaml``,
+        no ``~/.anappt/models.yaml`` (HOME patched to tmp_path), and module
+        ``_config`` reset to None. ``search_web`` must still be built because
+        DuckDuckGo is the default backend (no key required).
+        """
+        # No project-level models.yaml in ctx.project_dir (the ctx fixture
+        # does not create one). Patch HOME so global config is also absent.
+        monkeypatch.setattr("anappt.llm.provider.Path.home", lambda: tmp_path)
+        # Reset module-level web tool configs to simulate fresh process state
+        monkeypatch.setattr("anappt.tools.web_search._config", None)
+        monkeypatch.setattr("anappt.tools.web_fetch._config", None)
+
+        stage = S4AnalysisStage()
+        tools, tool_defs = stage._build_tools(ctx)
+
+        assert "search_web" in tools
+        assert any(td.name == "search_web" for td in tool_defs)
+
+    def test_s4_warns_on_stale_project_models_yaml(
+        self, tmp_path: Path, monkeypatch, capsys
+    ) -> None:
+        """_load_pipeline_context warns about stale project models.yaml and
+        does NOT read it.
+
+        Sets up a project dir with ``report.yaml`` and a stale
+        ``.anappt/models.yaml`` (containing a reasoning model). HOME is
+        patched to tmp_path so the global config is empty. After loading:
+        - stdout must contain the i18n warning (mentions ``models.yaml`` and
+          ``不再生效`` / ``no longer``).
+        - the stale file must NOT be read: the LLM's reasoning model must be
+          empty (from the empty global config), not ``stale-model``.
+        """
+        from anappt.cli import _load_pipeline_context
+
+        project_dir = tmp_path / "proj"
+        project_dir.mkdir()
+        # Minimal report.yaml (ReportConfig has defaults for all fields)
+        (project_dir / "report.yaml").write_text(
+            "project:\n  name: \"Stale Test\"\n", encoding="utf-8"
+        )
+        # Stale project-level models.yaml — must be ignored
+        anappt_dir = project_dir / ".anappt"
+        anappt_dir.mkdir()
+        (anappt_dir / "models.yaml").write_text(
+            "reasoning:\n  provider: openai\n  model: stale-model\n",
+            encoding="utf-8",
+        )
+
+        # Patch HOME so global ~/.anappt/models.yaml does not exist
+        monkeypatch.setattr("anappt.llm.provider.Path.home", lambda: tmp_path)
+        # Reset module-level web tool configs to avoid leakage from prior tests
+        monkeypatch.setattr("anappt.tools.web_search._config", None)
+        monkeypatch.setattr("anappt.tools.web_fetch._config", None)
+        # Stub out heavy optional collaborators that _load_pipeline_context builds
+        from anappt.io.skill_manager import SkillManager
+
+        monkeypatch.setattr(SkillManager, "__init__", lambda self: None)
+        monkeypatch.setattr(SkillManager, "locate_skill", lambda self, name: None)
+
+        ctx = _load_pipeline_context(project_dir)
+
+        captured = capsys.readouterr()
+        assert "models.yaml" in captured.out
+        # Locale-aware assertion: zh uses 不再生效, en uses no longer
+        assert "不再生效" in captured.out or "no longer" in captured.out
+
+        # The stale project-level models.yaml must NOT have been read:
+        # the global config is empty, so reasoning.model should be "".
+        assert ctx.llm._models["reasoning"].model == ""

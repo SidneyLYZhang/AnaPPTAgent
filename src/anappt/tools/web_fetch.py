@@ -10,16 +10,37 @@ import os
 
 import httpx
 
+from anappt.io.config import ModelsConfig, WebFetchConfig
+
+# Module-level config injected from ModelsConfig (env vars still take precedence)
+_config: WebFetchConfig | None = None
+
+
+def configure_from_models_config(models_config: ModelsConfig) -> None:
+    """Inject web fetch config from the global ModelsConfig.
+
+    Env var JINA_API_KEY always takes precedence over the injected yaml config.
+
+    Args:
+        models_config: The resolved global ModelsConfig.
+    """
+    global _config
+    _config = models_config.web_fetch
+
 
 def is_available() -> bool:
     """Check if the Web Fetch tool is available.
 
-    The tool requires JINA_API_KEY to be set.
+    The tool requires JINA_API_KEY (env var or yaml ``web_fetch.jina_api_key``)
+    to be set.
 
     Returns:
-        True if JINA_API_KEY is configured.
+        True if a JINA_API_KEY is configured in either env or yaml.
     """
-    return bool(os.environ.get("JINA_API_KEY"))
+    return bool(
+        os.environ.get("JINA_API_KEY")
+        or (_config.jina_api_key if _config else None)
+    )
 
 
 def fetch_url(url: str) -> str:
@@ -38,7 +59,9 @@ def fetch_url(url: str) -> str:
         RuntimeError: If JINA_API_KEY is not configured.
         httpx.HTTPStatusError: If the request fails.
     """
-    api_key = os.environ.get("JINA_API_KEY")
+    api_key = os.environ.get("JINA_API_KEY") or (
+        _config.jina_api_key if _config else None
+    )
     if not api_key:
         raise RuntimeError("JINA_API_KEY is not set. Web Fetch is unavailable.")
 

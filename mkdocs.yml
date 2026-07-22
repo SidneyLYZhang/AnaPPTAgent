@@ -96,6 +96,7 @@ nav:
       - English: README_en.md
       - 中文: README_zh.md
   - Installation: installation.md
+  - Configuration: configuration.md
   - Usage Guide:
       - CLI: cli-usage.md
       - Interactive TUI: tui-usage.md

@@ -99,24 +99,47 @@ uv run ruff check src tests # lint 检查
 
 ### 全局模型配置
 
-创建 `~/.anappt/models.yaml`：
+创建 `~/.anappt/models.yaml`（**所有配置集中在此文件,不再支持项目级覆盖**）：
 
 ```yaml
 reasoning:
   provider: openai
   model: gpt-4o
   api_key: ${OPENAI_API_KEY}
+  # thinking 缺省 → 使用模型最大思考强度
 
 analysis:
-  provider: openai
-  model: gpt-4o
-  api_key: ${OPENAI_API_KEY}
+  provider: anthropic
+  model: claude-sonnet-4-20250514
+  api_key: ${ANTHROPIC_API_KEY}
+  thinking: FALSE              # 显式关闭思考
 
 writing:
   provider: openai
   model: gpt-4o
   api_key: ${OPENAI_API_KEY}
+  # thinking 缺省 → 使用模型最大思考强度
+
+# Web 搜索（可选段,缺省使用 DuckDuckGo,无需 key）
+web_search:
+  backend: anysearch                       # 可选: duckduckgo | anysearch | zai
+  anysearch_api_key: ${ANYSEARCH_API_KEY}  # 可选,环境变量优先于 yaml
+  zai_api_key: ${ZAI_API_KEY}              # 可选,环境变量优先于 yaml
+
+# Web 读取（可选段,缺省禁用）
+web_fetch:
+  jina_api_key: ${JINA_API_KEY}            # 可选,环境变量优先于 yaml
 ```
+
+**字段说明**：
+
+- `thinking`（可选）：控制该角色调用 LLM 时的思考强度。
+  - 字段缺省 → 使用模型最大思考强度（对已知 provider 主动传"最大"参数,如 OpenAI o-series 的 `reasoning_effort="high"`)
+  - 字符串 `FALSE`（大小写不敏感,也接受 `False`/`false`/`OFF`/`off`）→ 关闭思考
+  - `low`/`medium`/`high` → 按指定强度调用（如 OpenAI 映射为 `reasoning_effort`）
+  - 整数 N → 作为 `budget_tokens` 传递给支持的 provider（如 Anthropic）
+- `web_search` / `web_fetch` 为可选段,缺省时：Web 搜索使用 DuckDuckGo（无需 key）,Web 读取禁用。
+- **环境变量优先于 models.yaml 中的对应字段**：当环境变量与 yaml 同时配置同一项时,以环境变量的值为准。
 
 或使用交互式配置器：
 
@@ -149,6 +172,9 @@ export ANTHROPIC_API_KEY="sk-ant-..."
 export DEEPSEEK_API_KEY="..."
 
 # Web 搜索后端（可选，默认使用 DuckDuckGo）
+# 注意:这些环境变量优先于 models.yaml 中的 web_search/web_fetch 配置;
+# 未设置环境变量时回退到 models.yaml,两者均未配置时使用默认值
+# (DuckDuckGo 搜索 / 禁用 web 读取)。
 export ANYSEARCH_API_KEY="..."         # AnySearch 后端
 export ZAI_API_KEY="..."               # z.ai（智谱）后端
 export WEB_SEARCH_BACKEND="anysearch"  # 或 "zai"、"duckduckgo"
@@ -197,8 +223,8 @@ anappt run
 | `anappt run`                  | 启动或恢复流水线                  |
 | `anappt resume`               | 从当前状态恢复流水线              |
 | `anappt status`               | 查看所有阶段状态                  |
-| `anappt config show`          | 显示当前模型配置                  |
-| `anappt config set`           | 交互式配置模型                    |
+| `anappt config show`          | 显示当前完整有效配置（含 thinking、web 搜索/读取，API key 掩码，标注来源） |
+| `anappt config set`           | 交互式配置三个模型角色（含 thinking）与 web_search/web_fetch 能力 |
 | `anappt setup`                | 安装/初始化 dashi-ppt skill 等资源 |
 | `anappt interactive`          | 启动交互模式                      |
 
