@@ -2,50 +2,53 @@
 
 ### Overview
 
-The analysis report is generated through five stages (S1-S5). Each stage uses a different LLM model role, produces specific artifacts, and includes a human review gate between stages.
+The analysis report is generated through five stages (S1-S5), orchestrated by the conversation-driven TUI `ConversationRunner`. Each stage uses a different LLM model role, produces specific artifacts via conversation, and includes a human review gate (`confirm`) between stages. S6 (PPT generation) is documented in `ppt-workflow.en.md` and is out of scope for this document.
 
 ### Flow Diagram
 
 ```
-report.yaml
-     │
-     ▼
 ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐     ┌─────────┐
 │   S1    │────▶│   S2    │────▶│   S3    │────▶│   S4    │────▶│   S5    │
 │  Topic  │     │  Data   │     │  Data   │     │  Data   │     │ Report  │
-│reasoning│     │reasoning│     │  No LLM │     │analysis │     │ writing │
+│reasoning│     │reasoning│     │reasoning│     │analysis │     │ writing │
 └─────────┘     └─────────┘     └─────────┘     └─────────┘     └─────────┘
      │               │               │               │               │
      ▼               ▼               ▼               ▼               ▼
- s1_topic.md  s2_data_req.md  s3_data_profile.md  s4_analysis.md  output/report.md
+ report.yaml   s2_data_req.md  s3_data_profile.md  s4_analysis.md  output/final_report.md
+ + s1_topic.md
      │               │               │               │               │
      ▼               ▼               ▼               ▼               ▼
  [Review Gate]  [Review Gate]  [Review Gate]   [Review Gate]   [Review Gate]
- confirm/revise confirm/revise confirm/revise  confirm/revise  confirm/revise
+   confirm         confirm         confirm          confirm          confirm
 ```
 
 ### S1: Topic & Goal Definition
 
 **Model Role**: reasoning
 
-**Input**: Project configuration from `report.yaml`
-- `project.name` — Project name
-- `report.topic` — Analysis topic
-- `report.motivation` — Analysis motivation
-- `report.audience` — Target audience
-- `report.objectives` — Analysis objectives
-- `report.success_criteria` — Success criteria
+**Conversation Goal**: Collect topic/motivation/audience/objectives/success-criteria/delivery via conversation, and produce `report.yaml` (project root) + `.anappt/s1_topic.md`
 
 **Process**:
-1. Reads `report.yaml` configuration
-2. Builds system prompt, instructing LLM to act as an expert analyst
-3. LLM generates a structured topic document with:
-   - Refined Topic
-   - Analysis Objectives
-   - Success Criteria
-   - Suggested Approach
+1. Collect via conversation in sequence:
+   - Report topic and motivation (background, business problem to solve)
+   - Target audience (decision-makers / executors / external clients, may be multiple)
+   - Report objectives (decisions to support, specific questions to answer)
+   - Success criteria (what makes a "good" report)
+   - Delivery format (expected PPT pages, whether PDF/HTML is needed, theme preference)
+2. Call `write_artifact("report.yaml", <YAML>)` to write `report.yaml` at the project root. The YAML structure contains `project`/`report`/`delivery` sections
+3. Call `write_artifact(".anappt/s1_topic.md", <content>)` to write the refined topic document, expanding on topic background, motivation, target audience, report objectives, success criteria, and suggested analysis approach
+4. Prompt the user to review both artifacts, then input `confirm` to proceed. Users may also provide revision feedback directly in the conversation; the LLM updates the artifacts and waits for `confirm` again
 
-**Output**: `.anappt/s1_topic.md`
+**Output**:
+- `report.yaml` — project root report specification
+- `.anappt/s1_topic.md` — refined topic document (referenced by S2/S4)
+
+**Tool Subset**: `read_file`/`write_artifact`/`read_memory`/`read_history`
+
+**is_ready Check**:
+- `report.yaml` exists and parses successfully via `ReportConfig.from_yaml`
+- `report.topic`, `report.motivation`, and `report.objectives` are all non-empty
+- `.anappt/s1_topic.md` exists
 
 **Review Focus**:
 - Topic direction accuracy
@@ -56,29 +59,39 @@ report.yaml
 
 **Model Role**: reasoning
 
-**Input**: S1 output + existing data files list in `data/` directory
+**Conversation Goal**: Derive the data requirement list needed to complete the analysis from `report.yaml` and data files, and produce `.anappt/s2_data_requirement.md`
+
+**Input**: S1 output (`report.yaml` + `.anappt/s1_topic.md`) + existing data files list and documentation in `data/` directory (optional)
 
 **Process**:
-1. Reads S1 topic document
-2. Scans `data/` directory for existing files
-3. LLM generates data requirement document with:
-   - Required Data Tables
-   - Expected Schema (column name, type, description)
-   - Data Quality Requirements
-   - Suggested Data Sources
+1. Use `read_file` to read `report.yaml` and `.anappt/s1_topic.md` as the basis for derivation
+2. If `data/` contains user-provided tracking docs, schema specs, or data dictionaries (e.g. `data/README.md`, `data/schema.md`), read them with `read_file` as reference. If not present, derive purely from analysis needs
+3. LLM derives the data requirement list; each entry includes at least:
+   - Metric name and calculation logic
+   - Required dimension breakdowns
+   - Data time range
+   - Minimum data granularity
+   - Estimated data volume
+   - Data source
+4. Call `write_artifact(".anappt/s2_data_requirement.md", <content>)` to write the list
+5. Prompt the user to review the artifact, then input `confirm`; revisions can be proposed in the conversation
+
+> **Important**: This is the key moment for users to prepare data. After reviewing S2, users should place data files (CSV, Excel, SQLite, DuckDB, Parquet) into the `data/` directory, then confirm to proceed to S3.
 
 **Output**: `.anappt/s2_data_requirement.md`
+
+**Tool Subset**: `read_file`/`write_artifact`/`read_memory`/`read_history`
+
+**is_ready Check**: `.anappt/s2_data_requirement.md` exists and contains at least one Markdown heading or list item
 
 **Review Focus**:
 - Data requirements reasonably cover analysis objectives
 - No missing key data
 - Users can prepare and add data files to `data/` at this stage
 
-> **Important**: This is the key moment for users to prepare data. After reviewing S2, users should place data files (CSV, Excel, SQLite, DuckDB, Parquet) into the `data/` directory, then confirm to proceed to S3.
-
 ### S3: Data Loading & Validation
 
-**Model Role**: None (no LLM used)
+**Model Role**: reasoning (conversation path is LLM-driven, orchestrating `execute_python` calls for data scanning and profile generation; legacy `run()` is pure local processing, no longer on the active path)
 
 **Input**: Data files in `data/` directory
 
@@ -92,18 +105,21 @@ report.yaml
 | Parquet | `.parquet` | pyarrow |
 
 **Process**:
-1. Detects all supported files in `data/`
-2. Loads all data files as DataFrames
-3. Generates data profile:
+1. Detect all supported files in `data/` (8 extensions in total)
+2. Load all data files as DataFrames
+3. Generate data profile:
    - Total file count
    - Shape (rows x columns) per table
-   - Column names list
-   - Data types
+   - Column names list and data types
    - Statistics summary for numeric columns (count, mean, std, min, max, etc.)
    - Null counts
    - File details (format, size)
+4. Check coverage against the S2 data requirement list
+5. Write `.anappt/s3_data_profile.md`
 
 **Output**: `.anappt/s3_data_profile.md`
+
+**is_ready Check**: `.anappt/s3_data_profile.md` exists and is non-empty
 
 **Review Focus**:
 - Data fully loaded
@@ -115,34 +131,26 @@ report.yaml
 
 **Model Role**: analysis
 
-**Input**: S1 topic document + S2 data requirements + S3 data profile + data in `data/` directory
+**Conversation Goal**: Perform iterative deep analysis on the data, produce `.anappt/s4_analysis_report.md`, supporting multiple rounds of user feedback
+
+**Input**: `report.yaml` + `data/` files + `.anappt/s2_data_requirement.md` + `.anappt/s3_data_profile.md` (if generated)
 
 **Process**:
-1. Reads S1, S2 outputs as context
-2. Loads all data files from `data/` directory
-3. Generates data info JSON (`.anappt/data_info.json`) with row count, column count, column names, and data types for each table
-4. Builds toolset (3 tools):
+1. Use `read_file` to read context: `report.yaml`, `data/` files and docs, S2 requirement list, S3 data profile
+2. Perform preliminary analysis and form a first-draft conclusion
+3. Iteratively call tools as needed (multiple rounds allowed):
+   - `execute_python`: statistical computation, pivoting, correlation analysis, optionally generate charts to `output/images/`
+   - `search_web`: supplement industry background, competitor data, market reports
+   - `fetch_url`: read full text of related web pages/reports/policy documents (if `JINA_API_KEY` is not configured, fall back to `search_web` snippets)
+4. Integrate conclusions, call `write_artifact(".anappt/s4_analysis_report.md", <content>)` to write the draft using a clear Markdown structure (Executive Summary, Methodology, Key Findings, Detailed Analysis, Recommendations, etc.)
+5. Prompt the user to review the draft and provide feedback; receive feedback → deepen reasoning → update the report → submit for user confirmation again
+6. Loop until the user inputs `confirm` to proceed to S5
 
-| Tool | Function | Limitations |
-|------|----------|-------------|
-| `execute_python` | Execute Python code | Sandboxed: network blocked, FS restricted, 60s timeout |
-| `search_web` | Web search | Auto-selects backend: DuckDuckGo / AnySearch / z.ai |
-| `fetch_url` | Read web pages | Only available when `JINA_API_KEY` is set |
+**Output**: `.anappt/s4_analysis_report.md` (the conversation path does not generate `.anappt/data_info.json`)
 
-5. Creates AgentLoop (max 10 iterations)
-6. LLM performs analysis via ReAct pattern:
-   - Load and explore data
-   - Perform statistical analysis
-   - Create visualizations if needed
-   - Identify key insights and patterns
-7. Generates analysis report with:
-   - Executive Summary
-   - Methodology
-   - Key Findings
-   - Detailed Analysis
-   - Recommendations
+**Tool Subset**: `read_file`/`write_artifact`/`execute_python`/`search_web`/`fetch_url`/`read_memory`/`read_history`
 
-**Output**: `.anappt/s4_analysis_report.md`
+**is_ready Check**: `.anappt/s4_analysis_report.md` exists and is non-empty
 
 **Review Focus**:
 - Analysis covers all objectives
@@ -150,26 +158,36 @@ report.yaml
 - Key findings are data-supported
 - Recommendations are actionable
 
-> **Sandbox Security**: Code runs in an isolated subprocess with network access fully blocked (socket module replaced) and file system access restricted to `data/`, temp directory, and current working directory.
+> **Sandbox Security**: `execute_python` runs in an isolated subprocess with network access fully blocked (socket module replaced) and file system access restricted to `data/`, temp directory, and current working directory.
 
 ### S5: Report Generation
 
 **Model Role**: writing
 
-**Input**: S4 analysis report + S1 topic document + `report.yaml` configuration
+**Conversation Goal**: Organize analysis conclusions into a complete, deliverable analysis report, producing `output/final_report.md`
+
+**Input**: `report.yaml` + `.anappt/s4_analysis_report.md` + optional `output/images/`
 
 **Process**:
-1. Reads S4 analysis report
-2. Reads S1 topic document for context
-3. Reads audience and objectives from `report.yaml`
-4. LLM transforms raw analysis into polished report:
-   - Uses standard Markdown formatting (headings, tables, lists)
-   - Includes: Executive Summary, Background, Methodology, Findings, Conclusions, Recommendations
-   - Language consistent with project configuration
+1. Use `read_file` to read context: `report.yaml` (topic, audience, objectives, success criteria), `.anappt/s4_analysis_report.md` (confirmed analysis conclusions), `output/images/` chart file list (optional)
+2. Generate a complete report with standard structure, including at least:
+   - Executive Summary
+   - Background & Objectives
+   - Data Sources & Methodology
+   - Core Findings (may be split into multiple sub-sections by theme)
+   - Conclusions & Recommendations
+   - Appendix / Data Notes
+3. Call `write_artifact("output/final_report.md", <content>)` to write the report using clear Markdown formatting (headings, tables, lists, image references, etc.)
+4. After writing, **explicitly remind the user to open `output/final_report.md` to review and edit**, informing the user that they can:
+   - Open the file directly in an editor and edit it, then return to the conversation and input `confirm`
+   - Or propose revision feedback directly in the conversation; the LLM updates the report and asks for user confirmation again
+5. Users may iterate multiple times; once satisfied, input `confirm` to proceed to S6
 
-**Output**:
-- `output/report.md` — Final report (user can view and edit)
-- `.anappt/s5_report.md` — Report copy (internal archive)
+**Output**: `output/final_report.md` (the conversation path does not generate `.anappt/s5_report.md`)
+
+**Tool Subset**: `read_file`/`write_artifact`/`read_memory`/`read_history`
+
+**is_ready Check**: `output/final_report.md` exists, is non-empty, and contains at least 2 level-1 headings (lines starting with `# `)
 
 **Review Focus**:
 - Report structure is clear
@@ -177,35 +195,38 @@ report.yaml
 - Conclusions are data-supported
 - Recommendations are specific and actionable
 
-> **Important**: After S5, the system prompts the user to open and review the report. Users can:
-> 1. Directly edit `output/report.md`
-> 2. Describe revision feedback in the terminal for LLM to regenerate
+> **Important**: After S5, the system prompts the user to open and review `output/final_report.md`. Users can:
+> 1. Directly edit `output/final_report.md`
+> 2. Describe revision feedback in the terminal; the LLM updates the report and waits for `confirm` again
 > 3. Confirm to proceed to S6 (PPT generation)
 
 ### Review Gate Mechanism
 
-After each stage completes, status becomes `awaiting_review`. Users can:
+After each stage completes, status becomes `awaiting_review`. The system supports the following 5 meta-commands:
 
-1. **Confirm**: Accept current output, advance to next stage
-   - Triggers Git commit: `feat(S1): confirm Topic Definition`
+1. **`confirm`**: Accept current output, advance to next stage
+   - Calls the stage's `is_ready` check; if it fails, prints a notice and stays in the current stage
+   - On success, triggers Git commit: `feat(S1): confirm Topic Definition`
 
-2. **Revise**: Provide feedback to re-run the stage
-   - Iteration count +1
-   - Triggers Git commit: `feat(S1): complete Topic Definition - .anappt/s1_topic.md`
-   - Feedback logged to session history
-
-3. **Exit**: Save progress and exit
+2. **`exit`**: Save progress and exit
    - Triggers Git commit: `chore: auto-save on exit`
    - Resume later with `anappt resume`
+
+3. **`status`**: Print the current pipeline status table (stage ID, name, status, iteration count)
+
+4. **`memory`**: Print project memory `.anappt/memory.md`
+
+5. **`help`**: Print the meta-command help
+
+> **Revisions are free-text**: When the user input is not a meta-command, the entire text enters the current stage's LLM conversation as a message. The LLM updates the artifact based on the feedback and waits for the user's `confirm` again. The system does **not** provide a standalone `revise`/`config`/`reset` system action.
 
 ### Artifact Files Summary
 
 | Stage | Artifact | Description |
 |-------|----------|-------------|
-| S1 | `.anappt/s1_topic.md` | Topic & goal document |
+| S1 | `report.yaml` | Project root report specification |
+| S1 | `.anappt/s1_topic.md` | Refined topic document |
 | S2 | `.anappt/s2_data_requirement.md` | Data requirement document |
 | S3 | `.anappt/s3_data_profile.md` | Data profile |
 | S4 | `.anappt/s4_analysis_report.md` | Analysis report |
-| S4 | `.anappt/data_info.json` | Data structure info (JSON) |
-| S5 | `output/report.md` | Final analysis report |
-| S5 | `.anappt/s5_report.md` | Report copy |
+| S5 | `output/final_report.md` | Final analysis report |

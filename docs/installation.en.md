@@ -141,7 +141,7 @@ uv tool run anappt --help
 uvx anappt --help
 ```
 
-Expected output includes the `anappt` string and the list of subcommands (`new`, `run`, `resume`, `status`, `config`, `interactive`).
+Expected output includes the `anappt` string and the list of subcommands (`init`, `new`, `run`, `resume`, `status`, `config`, `interactive`, `setup`).
 
 You can also list installed uv tools:
 

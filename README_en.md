@@ -192,20 +192,20 @@ anappt new my_report
 # 2. Navigate to project directory
 cd my_report
 
-# 3. Edit report.yaml — define your topic, audience, objectives
-#    (Open report.yaml in your editor)
-
-# 4. Place data files in data/
+# 3. Place data files in data/
 #    Supported formats: CSV, Excel, SQLite, DuckDB, Parquet
 cp ~/sales_data.csv data/
 
-# 5. Run the pipeline
+# 4. Run the pipeline (starts the conversational TUI)
 anappt run
 
-# 6. Review each stage output, type 'confirm' to proceed
-#    Or type revision feedback to re-run the stage
+# 5. S1: describe your topic, audience and objectives in conversation;
+#    the agent generates report.yaml and .anappt/s1_topic.md
 
-# 7. After S5, review the generated report at output/report.md
+# 6. Once a stage's output is ready, type 'confirm' to advance;
+#    or type free-text feedback and the agent revises the stage output
+
+# 7. After S5, review the generated report at output/final_report.md
 # 8. After S6, open the presentation at output/ppt/presentation.html
 ```
 
@@ -213,8 +213,8 @@ anappt run
 
 | Command                        | Description                                      |
 |--------------------------------|--------------------------------------------------|
-| `anappt new <name>`            | Create a new project directory                    |
-| `anappt init <name>`           | Alias of `anappt new` — create a new project      |
+| `anappt new <name>`            | Alias of `init`; with no `<name>`, initialize the current directory in place |
+| `anappt init <name>`           | Create a `<name>/` subdirectory and initialize it (alias of `new`); with no `<name>`, initialize the current directory in place |
 | `anappt run`                   | Start or resume the pipeline                      |
 | `anappt resume`                | Resume the pipeline from current state             |
 | `anappt status`                | Show all stage statuses                           |
@@ -237,13 +237,15 @@ AnaPPTAgent/
 │   ├── orchestrator.py         # Pipeline orchestrator
 │   ├── project.py              # Project initialization
 │   ├── cli.py                  # CLI entry point + InteractiveUI
+│   ├── conversation.py         # Unified conversational TUI engine (ConversationRunner)
 │   ├── io/
 │   │   ├── config.py           # ReportConfig, ModelsConfig
 │   │   ├── state.py            # StateManager, StageStatus
+│   │   ├── memory.py           # Project memory manager (MemoryManager)
 │   │   ├── data_loader.py      # Multi-format data loading
 │   │   ├── git_auto.py         # Git auto-commit
 │   │   ├── skill_manager.py    # dashi-ppt-skill download & cache
-│   │   └── session.py          # SessionLogger
+│   │   └── session.py          # Session log + core summary (YYYY-MM-DD_<stage>.md)
 │   ├── llm/
 │   │   ├── models.py           # ModelRole type
 │   │   └── provider.py         # AnaPPTLLM (litellm wrapper)
@@ -265,7 +267,7 @@ AnaPPTAgent/
 │       ├── zh.json
 │       └── en.json
 ├── templates/project/          # Project scaffolding templates
-├── tests/                      # Test suite (441 tests)
+├── tests/                      # Test suite (672 tests)
 ├── scripts/                    # Setup scripts
 ├── docs/                       # Documentation
 ├── pyproject.toml
@@ -276,23 +278,24 @@ AnaPPTAgent/
 
 ```
 my_report/
-├── report.yaml                 # Report configuration (topic, audience, etc.)
+├── report.yaml                 # Report configuration (S1-generated: topic, audience, etc.)
 ├── .gitignore
 ├── data/                       # Place your data files here
 │   └── README.md
 ├── output/                     # Generated artifacts
-│   ├── report.md               # S5 output: analysis report
+│   ├── final_report.md         # S5 output: analysis report
 │   ├── images/                 # Charts and images
 │   └── ppt/
-│       └── presentation.html   # S6 output: HTML slides
+│       ├── goal.json           # S6 output: PPT goal spec
+│       └── presentation.html   # S6 output: HTML slides (optional .pptx)
 └── .anappt/
-    ├── state.yaml              # Pipeline state
+    ├── state.yaml              # Pipeline state (project init marker)
+    ├── memory.md               # Project memory (accumulated across stages)
     ├── s1_topic.md             # S1 artifact
     ├── s2_data_requirement.md  # S2 artifact
     ├── s3_data_profile.md      # S3 artifact
     ├── s4_analysis_report.md   # S4 artifact
-    ├── s5_report.md            # S5 artifact copy
-    └── session_history/        # Conversation logs per stage
+    └── session_history/        # Session logs (YYYY-MM-DD_<stage>.md)
 ```
 
 ## dashi-ppt-skill Dependency
@@ -301,10 +304,10 @@ The PPT generation (S6) produces a self-contained HTML presentation. For PPTX ex
 
 - **Node.js** >= 20 and **npm** must be installed
 - **Chrome/Chromium/Edge** browser is required for PPTX rendering
-- Install the dashi-ppt-skill globally:
+- Install the dashi-ppt-skill itself via `anappt setup` (checks Node.js ≥ 20, npm, Chrome, and invokes `npx dashi-ppt-skill@latest`):
 
 ```bash
-npm install -g dashi-ppt-skill
+anappt setup
 ```
 
 If Node.js is not available, AnaPPTAgent falls back to HTML-only output which can be opened in any browser and printed to PDF.
@@ -313,14 +316,14 @@ If Node.js is not available, AnaPPTAgent falls back to HTML-only output which ca
 
 | Stage | Name                      | Model Role | Description                                         |
 |-------|---------------------------|------------|-----------------------------------------------------|
-| S1    | Topic & Goal Definition   | reasoning  | Analyzes report.yaml, refines topic and objectives  |
+| S1    | Topic & Goal Definition   | reasoning  | Conversational: generates report.yaml + .anappt/s1_topic.md |
 | S2    | Data Requirement Analysis | reasoning  | Determines what data is needed, expected schemas    |
-| S3    | Data Loading & Validation | —          | Loads data files, generates data profile summary     |
+| S3    | Data Loading & Validation | reasoning  | LLM orchestrates execute_python to scan data, generates data profile |
 | S4    | Data Analysis             | analysis   | Agent loop with code execution, web search tools    |
-| S5    | Report Generation         | writing    | Transforms analysis into polished report            |
-| S6    | PPT Generation            | writing    | Converts report to HTML slide presentation          |
+| S5    | Report Generation         | writing    | Transforms analysis into polished report (output/final_report.md) |
+| S6    | PPT Generation            | writing    | Converts report to HTML slide presentation (output/ppt/presentation.html) |
 
-Each stage pauses for user review (confirm or revise) before proceeding.
+Each stage pauses for user review — type `confirm` to advance or enter free-text feedback for the LLM to revise the artifact.
 
 ## Internationalization
 

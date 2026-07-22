@@ -143,6 +143,130 @@ class TestStageBaseRun:
         assert stage.get_artifacts(mock_ctx) == ["test.md"]
 
 
+class TestStageBaseDeclarative:
+    """Tests for the declarative interface: goal, system_prompt_fragment,
+    tools, and is_ready default behaviors."""
+
+    def test_goal_default_empty(self) -> None:
+        stage = MockStage()
+        assert stage.goal == ""
+
+    def test_goal_subclass_override(self) -> None:
+        class GoalStage(StageBase):
+            stage_id = "S1"
+            stage_name = "stage.s1.name"
+            goal = "s1.goal"
+
+            def run(self, ctx: PipelineContext) -> StageOutput:
+                return StageOutput()
+
+        assert GoalStage().goal == "s1.goal"
+
+    def test_system_prompt_fragment_default_empty(
+        self, mock_ctx: PipelineContext
+    ) -> None:
+        class PlainStage(StageBase):
+            stage_id = "S3"
+            stage_name = "stage.s3.name"
+
+            def run(self, ctx: PipelineContext) -> StageOutput:
+                return StageOutput()
+
+        assert PlainStage().system_prompt_fragment(mock_ctx) == ""
+
+    def test_system_prompt_fragment_override(
+        self, mock_ctx: PipelineContext
+    ) -> None:
+        class PromptStage(StageBase):
+            stage_id = "S1"
+            stage_name = "stage.s1.name"
+
+            def run(self, ctx: PipelineContext) -> StageOutput:
+                return StageOutput()
+
+            def system_prompt_fragment(self, ctx: PipelineContext) -> str:
+                return "You are an analyst."
+
+        assert PromptStage().system_prompt_fragment(mock_ctx) == "You are an analyst."
+
+    def test_tools_default_empty(self, mock_ctx: PipelineContext) -> None:
+        class PlainStage(StageBase):
+            stage_id = "S3"
+            stage_name = "stage.s3.name"
+
+            def run(self, ctx: PipelineContext) -> StageOutput:
+                return StageOutput()
+
+        assert PlainStage().tools(mock_ctx) == []
+
+    def test_tools_override(self, mock_ctx: PipelineContext) -> None:
+        class ToolStage(StageBase):
+            stage_id = "S4"
+            stage_name = "stage.s4.name"
+
+            def run(self, ctx: PipelineContext) -> StageOutput:
+                return StageOutput()
+
+            def tools(self, ctx: PipelineContext) -> list[str]:
+                return ["execute_python", "search_web"]
+
+        assert ToolStage().tools(mock_ctx) == ["execute_python", "search_web"]
+
+    def test_is_ready_default_no_artifacts(self, mock_ctx: PipelineContext) -> None:
+        """Stage declaring no artifacts is_ready by default."""
+
+        class PlainStage(StageBase):
+            stage_id = "S3"
+            stage_name = "stage.s3.name"
+
+            def run(self, ctx: PipelineContext) -> StageOutput:
+                return StageOutput()
+
+        assert PlainStage().is_ready(mock_ctx) is True
+
+    def test_is_ready_default_artifacts_all_exist(
+        self, mock_ctx: PipelineContext
+    ) -> None:
+        """Default is_ready True when all declared artifacts exist on disk."""
+
+        class ReadyStage(StageBase):
+            stage_id = "S1"
+            stage_name = "stage.s1.name"
+
+            def run(self, ctx: PipelineContext) -> StageOutput:
+                return StageOutput()
+
+            def get_artifacts(self, ctx: PipelineContext) -> list[str]:
+                return ["a.md", "sub/b.md"]
+
+        # Pre-create both files under the project dir.
+        (mock_ctx.project_dir / "a.md").write_text("x", encoding="utf-8")
+        (mock_ctx.project_dir / "sub").mkdir(parents=True, exist_ok=True)
+        (mock_ctx.project_dir / "sub" / "b.md").write_text("y", encoding="utf-8")
+
+        assert ReadyStage().is_ready(mock_ctx) is True
+
+    def test_is_ready_default_missing_artifact(
+        self, mock_ctx: PipelineContext
+    ) -> None:
+        """Default is_ready False when at least one declared artifact is missing."""
+
+        class PartialStage(StageBase):
+            stage_id = "S1"
+            stage_name = "stage.s1.name"
+
+            def run(self, ctx: PipelineContext) -> StageOutput:
+                return StageOutput()
+
+            def get_artifacts(self, ctx: PipelineContext) -> list[str]:
+                return ["present.md", "missing.md"]
+
+        (mock_ctx.project_dir / "present.md").write_text("x", encoding="utf-8")
+        # Note: missing.md is intentionally not created.
+
+        assert PartialStage().is_ready(mock_ctx) is False
+
+
 class TestStageBasePrerequisites:
     """Tests for validate_prerequisites method."""
 

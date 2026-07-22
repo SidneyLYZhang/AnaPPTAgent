@@ -11,7 +11,7 @@ All LLM and web-capability configuration for AnaPPTAgent lives in a single globa
 |------|-------|
 | File path | `~/.anappt/models.yaml` (`~` is your home directory) |
 | How to create | `anappt config set` (interactive) or create manually |
-| When read | Every `anappt run` / `resume` / `config show` invocation |
+| When read | Every `anappt run` / `resume` / `interactive` / `config show` invocation |
 | When written | After `anappt config set` completes the interactive flow |
 
 !!! warning "Project-level models.yaml is no longer read"

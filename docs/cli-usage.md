@@ -13,8 +13,8 @@ AnaPPTAgent 的 CLI 入口为 `anappt`，支持以下子命令：
 | 命令 | 说明 |
 |------|------|
 | `anappt` | 无参数时显示帮助信息 |
-| `anappt new <name> [--no-skill] [--registry <url>]` | 创建新分析项目 |
-| `anappt init <name> [--no-skill] [--registry <url>]` | 创建新分析项目（`new` 的别名） |
+| `anappt new [<name>] [--no-skill] [--registry <url>]` | 创建新分析项目；不带 `<name>` 时原地初始化当前目录，带 `<name>` 时在当前目录下创建同名子目录 |
+| `anappt init [<name>] [--no-skill] [--registry <url>]` | 创建新分析项目（`new` 的别名）；同样支持不带名字原地初始化当前目录 |
 | `anappt run` | 启动或恢复流水线 |
 | `anappt resume` | 从当前状态恢复流水线 |
 | `anappt status` | 显示所有阶段状态 |
@@ -117,6 +117,9 @@ delivery:
 | `delivery.formats` | list | 输出格式列表，支持 `pptx` 和 `html` |
 | `delivery.theme_preference` | string/null | PPT 主题，设为 `null` 在 S6 阶段交互选择 |
 
+!!! note "report.yaml 的生成与覆盖"
+    `anappt new`/`init` 拷贝的 `report.yaml` 仅为**占位模板**。进入流水线后，S1 阶段会通过对话与 LLM 共同生成或精炼 `report.yaml`（经由 `write_artifact` 工具写回项目根），覆盖模板中的占位字段。因此模板值仅供初始化参考，最终生效内容以 S1 产出为准。
+
 ## 环境变量
 
 | 环境变量 | 说明 |
@@ -140,11 +143,14 @@ delivery:
 ### 创建新项目
 
 ```bash
-# 创建名为 my_report 的新项目
+# 创建名为 my_report 的新项目（在当前目录下创建 my_report/ 子目录）
 anappt new my_report
 
 # 使用 init 别名
 anappt init my_report
+
+# 不带名字：原地初始化当前目录（不创建子目录）
+anappt init
 
 # 跳过 dashi-ppt-skill 下载
 anappt new my_report --no-skill
@@ -157,28 +163,26 @@ anappt new my_report --registry https://registry.npmmirror.com
 
 ```
 my_report/
-├── report.yaml
+├── report.yaml                  # 项目配置（占位模板，S1 会覆盖）
 ├── .gitignore
 ├── data/
 │   └── README.md
 ├── output/
-│   ├── report.md               # S5 输出：分析报告
+│   ├── final_report.md          # S5 输出：分析报告
 │   ├── images/
 │   └── ppt/
-│       ├── goal.json           # S6 中间产物：LLM 构造的幻灯片结构
-│       ├── presentation.pptx   # S6 可选产物：PPTX（当 formats 含 pptx 时）
-│       └── ppt/
-│           └── index.html      # S6 输出：HTML 幻灯片（完整路径 output/ppt/ppt/index.html）
+│       ├── goal.json            # S6 中间产物：LLM 构造的幻灯片结构
+│       ├── presentation.pptx    # S6 可选产物：PPTX（当 formats 含 pptx 时）
+│       └── presentation.html    # S6 输出：HTML 幻灯片
 └── .anappt/
-    ├── state.yaml
+    ├── state.yaml               # 项目初始化标记
+    ├── memory.md                # 跨阶段共享记忆（LLM 维护）
     ├── s1_topic.md
     ├── s2_data_requirement.md
     ├── s3_data_profile.md
     ├── s4_analysis_report.md
-    ├── data_info.json          # S4 产物：数据结构信息
-    ├── s5_report.md
     └── session_history/
-        └── S1_session.md       # 按阶段 ID 命名的会话日志
+        └── 2024-12-01_S1.md     # 按“日期_阶段”命名的会话日志
 ```
 
 ### 运行流水线
@@ -189,7 +193,7 @@ cd my_report
 anappt run
 ```
 
-流水线会依次执行 S1 到 S6，每个阶段完成后暂停等待用户确认。
+进入**对话式 TUI**后，由 LLM 多轮对话驱动各阶段产出（选题、数据需求、分析、报告、PPT 等）。每个阶段完成后，通过 `confirm` 元命令推进到下一阶段；可随时输入自由文本与 LLM 对话、要求修改或补充。
 
 ### 恢复流水线
 
@@ -252,12 +256,27 @@ anappt setup --registry https://registry.npmmirror.com
 ### 交互模式
 
 ```bash
-# 启动交互模式（必须在项目目录中运行）
+# 启动对话式 TUI（必须在项目目录中运行）
 anappt interactive
 ```
 
-交互模式提供命令循环，支持 `confirm`、`status`、`config`、`reset`、`help`、`exit` 等命令。详见 [交互模式指南](tui-usage.md)。
+交互模式即**对话式 TUI**：输入自由文本即进入与 LLM 的多轮对话，由对话驱动阶段产出。支持的元命令共 5 个：
+
+| 元命令 | 作用 |
+|--------|------|
+| `confirm` | 确认当前阶段产出，推进到下一阶段 |
+| `exit` | 退出对话式 TUI |
+| `status` | 查看各阶段状态 |
+| `memory` | 查看/编辑跨阶段共享记忆 `.anappt/memory.md` |
+| `help` | 显示元命令帮助 |
+
+详见 [交互模式指南](tui-usage.md)。
 
 ## 会话日志
 
-每个阶段在 `.anappt/session_history/` 下生成独立的会话日志，文件名为 `{stage_id}_session.md`（如 `S1_session.md`、`S4_session.md`）。日志记录该阶段中 LLM 与用户的对话内容，便于回溯与审计。
+每个阶段在 `.anappt/session_history/` 下生成独立的会话日志，文件名为 `YYYY-MM-DD_<stage>.md`（UTC 日期，如 `2024-12-01_S1.md`、`2024-12-01_S4.md`）。日志结构为：
+
+- `## 核心摘要`：由 LLM 生成的本次对话重点摘要（1-3 句）
+- `### 对话记录`：按时间戳记录的 Agent/用户对话内容
+
+便于回溯与审计。

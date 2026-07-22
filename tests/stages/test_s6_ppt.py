@@ -12,7 +12,6 @@ from anappt.io.state import StateManager
 from anappt.stages.s6_ppt import S6PPTStage
 from anappt.types import PipelineContext
 
-
 VALID_GOAL_JSON = (
     '{"title":"Test","goal":"...","audience":[],"owner":"test",'
     '"randomSeed":42,"pageCount":5,"themePack":"theme03","slides":[]}'
@@ -441,3 +440,143 @@ class TestS6RunWorkflow:
         mock_skill_manager.install_or_update_skill.assert_not_called()
         # 也验证 save_skill_dir_config 未被调用 (持久化路径也不在 S6 阶段)
         mock_skill_manager.save_skill_dir_config.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Declarative metadata tests (Task B7)
+# ---------------------------------------------------------------------------
+
+
+def _make_empty_ctx(tmp_path: Path) -> PipelineContext:
+    """Return a PipelineContext with an empty ReportConfig and no skill_manager."""
+    empty_config = ReportConfig()
+    state = StateManager(tmp_path / ".anappt" / "state.yaml")
+    return PipelineContext(
+        project_dir=tmp_path,
+        config=empty_config,
+        llm=MagicMock(),
+        state=state,
+    )
+
+
+class TestS6Declarative:
+    """Tests for the declarative interface added in Task B7."""
+
+    def test_goal_is_s6_goal_key(self) -> None:
+        assert S6PPTStage().goal == "s6.goal"
+
+    def test_goal_i18n_resolves(self) -> None:
+        """``s6.goal`` should resolve to a non-empty localized string."""
+        from anappt.i18n import set_locale, t
+
+        set_locale("zh")
+        text = t(S6PPTStage().goal)
+        assert text
+        assert text != "s6.goal"  # not a missing-key fallback
+
+    def test_get_artifacts_returns_goal_json_and_html(
+        self, tmp_path: Path
+    ) -> None:
+        """get_artifacts returns the expected S6 artifact paths."""
+        ctx = _make_empty_ctx(tmp_path)
+        artifacts = S6PPTStage().get_artifacts(ctx)
+        assert "output/ppt/goal.json" in artifacts
+        assert "output/ppt/presentation.html" in artifacts
+        assert len(artifacts) == 2
+
+    def test_system_prompt_fragment_nonempty(self, tmp_path: Path) -> None:
+        ctx = _make_empty_ctx(tmp_path)
+        fragment = S6PPTStage().system_prompt_fragment(ctx)
+        assert isinstance(fragment, str)
+        assert len(fragment) > 0
+
+    def test_system_prompt_fragment_contains_key_actions(
+        self, tmp_path: Path
+    ) -> None:
+        """The prompt must mention the key S6 actions per spec B7."""
+        ctx = _make_empty_ctx(tmp_path)
+        fragment = S6PPTStage().system_prompt_fragment(ctx)
+        # Spec B7: construct goal.json, pick themePack, call render_deck.
+        assert "goal.json" in fragment
+        assert "themePack" in fragment
+        assert "render_deck" in fragment
+        # Must mention the artifact to render.
+        assert "presentation.html" in fragment
+        # Must instruct the LLM to wait for user confirm.
+        assert "confirm" in fragment
+
+    def test_system_prompt_fragment_contains_export_pptx_guidance(
+        self, tmp_path: Path
+    ) -> None:
+        ctx = _make_empty_ctx(tmp_path)
+        fragment = S6PPTStage().system_prompt_fragment(ctx)
+        assert "export_pptx" in fragment
+
+    def test_tools_returns_expected_subset(self, tmp_path: Path) -> None:
+        ctx = _make_empty_ctx(tmp_path)
+        tools = S6PPTStage().tools(ctx)
+        assert tools == [
+            "read_file",
+            "write_artifact",
+            "render_deck",
+            "export_pptx",
+            "read_memory",
+            "read_history",
+        ]
+
+    def test_is_ready_false_when_both_artifacts_missing(
+        self, tmp_path: Path
+    ) -> None:
+        """Empty project dir → both artifacts missing → is_ready False."""
+        ctx = _make_empty_ctx(tmp_path)
+        assert S6PPTStage().is_ready(ctx) is False
+
+    def test_is_ready_false_when_only_goal_json_exists(
+        self, tmp_path: Path
+    ) -> None:
+        """Only goal.json exists, presentation.html missing → False."""
+        ctx = _make_empty_ctx(tmp_path)
+        ppt_dir = tmp_path / "output" / "ppt"
+        ppt_dir.mkdir(parents=True, exist_ok=True)
+        (ppt_dir / "goal.json").write_text('{"title":"x"}', encoding="utf-8")
+        assert S6PPTStage().is_ready(ctx) is False
+
+    def test_is_ready_false_when_only_html_exists(
+        self, tmp_path: Path
+    ) -> None:
+        """Only presentation.html exists, goal.json missing → False."""
+        ctx = _make_empty_ctx(tmp_path)
+        ppt_dir = tmp_path / "output" / "ppt"
+        ppt_dir.mkdir(parents=True, exist_ok=True)
+        (ppt_dir / "presentation.html").write_text(
+            "<html></html>", encoding="utf-8"
+        )
+        assert S6PPTStage().is_ready(ctx) is False
+
+    def test_is_ready_false_when_goal_json_unparseable(
+        self, tmp_path: Path
+    ) -> None:
+        """Both files exist but goal.json is invalid JSON → False."""
+        ctx = _make_empty_ctx(tmp_path)
+        ppt_dir = tmp_path / "output" / "ppt"
+        ppt_dir.mkdir(parents=True, exist_ok=True)
+        (ppt_dir / "goal.json").write_text(
+            "{not valid json}", encoding="utf-8"
+        )
+        (ppt_dir / "presentation.html").write_text(
+            "<html></html>", encoding="utf-8"
+        )
+        assert S6PPTStage().is_ready(ctx) is False
+
+    def test_is_ready_true_when_both_artifacts_exist(
+        self, tmp_path: Path
+    ) -> None:
+        """Both goal.json and presentation.html exist → True."""
+        ctx = _make_empty_ctx(tmp_path)
+        ppt_dir = tmp_path / "output" / "ppt"
+        ppt_dir.mkdir(parents=True, exist_ok=True)
+        (ppt_dir / "goal.json").write_text('{"title":"x"}', encoding="utf-8")
+        (ppt_dir / "presentation.html").write_text(
+            "<html></html>", encoding="utf-8"
+        )
+        assert S6PPTStage().is_ready(ctx) is True

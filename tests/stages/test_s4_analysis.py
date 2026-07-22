@@ -257,3 +257,107 @@ class TestS4ProjectModelsYaml:
         # The stale project-level models.yaml must NOT have been read:
         # the global config is empty, so reasoning.model should be "".
         assert ctx.llm._models["reasoning"].model == ""
+
+
+# ---------------------------------------------------------------------------
+# Declarative metadata tests (Task B5)
+# ---------------------------------------------------------------------------
+
+
+def _make_empty_ctx(tmp_path: Path) -> PipelineContext:
+    """Return a PipelineContext with an empty ReportConfig (no prior artifacts)."""
+    empty_config = ReportConfig()
+    state = StateManager(tmp_path / ".anappt" / "state.yaml")
+    return PipelineContext(
+        project_dir=tmp_path,
+        config=empty_config,
+        llm=MagicMock(),
+        state=state,
+    )
+
+
+class TestS4Declarative:
+    """Tests for the declarative interface added in Task B5."""
+
+    def test_goal_is_s4_goal_key(self) -> None:
+        assert S4AnalysisStage().goal == "s4.goal"
+
+    def test_goal_i18n_resolves(self) -> None:
+        """``s4.goal`` should resolve to a non-empty localized string."""
+        from anappt.i18n import set_locale, t
+
+        set_locale("zh")
+        text = t(S4AnalysisStage().goal)
+        assert text
+        assert text != "s4.goal"  # not a missing-key fallback
+
+    def test_get_artifacts_returns_s4_analysis_report(
+        self, tmp_path: Path
+    ) -> None:
+        """get_artifacts returns the expected S4 artifact path."""
+        ctx = _make_empty_ctx(tmp_path)
+        artifacts = S4AnalysisStage().get_artifacts(ctx)
+        assert artifacts == [".anappt/s4_analysis_report.md"]
+
+    def test_system_prompt_fragment_nonempty(self, tmp_path: Path) -> None:
+        ctx = _make_empty_ctx(tmp_path)
+        fragment = S4AnalysisStage().system_prompt_fragment(ctx)
+        assert isinstance(fragment, str)
+        assert len(fragment) > 0
+
+    def test_system_prompt_fragment_contains_key_actions(
+        self, tmp_path: Path
+    ) -> None:
+        """The prompt must mention the key S4 actions per spec B5."""
+        ctx = _make_empty_ctx(tmp_path)
+        fragment = S4AnalysisStage().system_prompt_fragment(ctx)
+        # Spec B5: iterative analysis loop.
+        assert "迭代" in fragment
+        # Must mention the artifact to write.
+        assert "s4_analysis_report.md" in fragment
+        # Must instruct the LLM to wait for user confirm.
+        assert "confirm" in fragment
+
+    def test_system_prompt_fragment_mentions_tool_guidance(
+        self, tmp_path: Path
+    ) -> None:
+        """The prompt must mention S4's available tools."""
+        ctx = _make_empty_ctx(tmp_path)
+        fragment = S4AnalysisStage().system_prompt_fragment(ctx)
+        assert "execute_python" in fragment
+        assert "search_web" in fragment
+        assert "fetch_url" in fragment
+
+    def test_tools_returns_expected_subset(self, tmp_path: Path) -> None:
+        ctx = _make_empty_ctx(tmp_path)
+        tools = S4AnalysisStage().tools(ctx)
+        assert tools == [
+            "read_file",
+            "write_artifact",
+            "execute_python",
+            "search_web",
+            "fetch_url",
+            "read_memory",
+            "read_history",
+        ]
+
+    def test_is_ready_false_when_artifact_missing(self, tmp_path: Path) -> None:
+        """Empty project dir → artifact missing → is_ready False."""
+        ctx = _make_empty_ctx(tmp_path)
+        assert S4AnalysisStage().is_ready(ctx) is False
+
+    def test_is_ready_false_when_artifact_empty(self, tmp_path: Path) -> None:
+        """Artifact exists but is empty → False."""
+        ctx = _make_empty_ctx(tmp_path)
+        artifact_path = tmp_path / ".anappt" / "s4_analysis_report.md"
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text("   \n  \n", encoding="utf-8")
+        assert S4AnalysisStage().is_ready(ctx) is False
+
+    def test_is_ready_true_when_artifact_nonempty(self, tmp_path: Path) -> None:
+        """Artifact exists with non-empty content → True."""
+        ctx = _make_empty_ctx(tmp_path)
+        artifact_path = tmp_path / ".anappt" / "s4_analysis_report.md"
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text("# Analysis Report\n\n结论", encoding="utf-8")
+        assert S4AnalysisStage().is_ready(ctx) is True

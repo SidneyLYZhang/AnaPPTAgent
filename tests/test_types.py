@@ -276,6 +276,44 @@ class TestPipelineContext:
         )
         assert ctx.git is git
 
+    def test_memory_defaults_to_none(
+        self,
+        tmp_path: Path,
+        mock_config,
+        mock_llm,
+        mock_state,
+    ) -> None:
+        """PipelineContext.memory defaults to None when not injected (Task D2)."""
+        ctx = PipelineContext(
+            project_dir=tmp_path,
+            config=mock_config,
+            llm=mock_llm,
+            state=mock_state,
+        )
+        assert ctx.memory is None
+
+    def test_with_memory(
+        self,
+        tmp_path: Path,
+        mock_config,
+        mock_llm,
+        mock_state,
+    ) -> None:
+        """PipelineContext accepts a MemoryManager via the memory kwarg (Task D2)."""
+        from anappt.io.memory import MemoryManager
+
+        memory_file = tmp_path / ".anappt" / "memory.md"
+        memory = MemoryManager(memory_file)
+        ctx = PipelineContext(
+            project_dir=tmp_path,
+            config=mock_config,
+            llm=mock_llm,
+            state=mock_state,
+            memory=memory,
+        )
+        assert ctx.memory is memory
+        assert ctx.memory.memory_file == memory_file
+
 
 class TestModelRoleForStage:
     """Tests for model_role_for_stage function."""

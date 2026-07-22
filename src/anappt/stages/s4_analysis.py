@@ -3,6 +3,26 @@
 Uses the analysis LLM with the AgentLoop tool-calling framework to
 perform data analysis. The agent can call code execution, web search,
 and web fetch tools to explore and analyze the loaded data.
+
+Declarative interface (used by the conversation-driven TUI):
+    - goal: ``s4.goal`` — iteratively perform deep analysis and produce
+      ``.anappt/s4_analysis_report.md``, supporting multiple rounds of
+      user feedback.
+    - artifacts: ``.anappt/s4_analysis_report.md``.
+    - system_prompt_fragment: Chinese guidance per design 4.4 — read
+      ``report.yaml`` + ``data/`` + ``.anappt/s2_data_requirement.md``,
+      run an iterative analysis loop (preliminary analysis → on-demand
+      ``execute_python``/``search_web``/``fetch_url`` → integrate
+      conclusions → output the report), accept user feedback to deepen
+      analysis and update the report, optionally generate charts to
+      ``output/images/``, write the artifact and await user ``confirm``.
+    - tools: ``read_file``/``write_artifact``/``execute_python``/
+      ``search_web``/``fetch_url``/``read_memory``/``read_history``.
+    - is_ready: ``.anappt/s4_analysis_report.md`` exists and is non-empty.
+
+The legacy ``run()`` method is preserved for backward compatibility with
+the Orchestrator-based execution path; it will be removed once the
+conversation runner is fully wired (Task C2-C4).
 """
 
 from __future__ import annotations
@@ -15,6 +35,42 @@ from anappt.stage_base import StageBase
 from anappt.tools.agent_loop import AgentLoop, ToolDef
 from anappt.types import PipelineContext, StageOutput
 
+# Stage-specific system prompt fragment (Chinese, drives S4 conversation).
+# S4 is the core analysis stage with an iterative loop and the broadest
+# tool subset (code exec + web search + web fetch).
+S4_SYSTEM_PROMPT_FRAGMENT = """\
+你当前处于 S4「数据分析」阶段,这是整个流水线中最重要的阶段,支持迭代循环。
+你的目标是基于数据进行深度分析,产出 ``.anappt/s4_analysis_report.md``,
+并支持用户多轮反馈直至满意。
+
+请按以下迭代流程驱动对话：
+
+1. 用 ``read_file`` 读取上下文：
+   - ``report.yaml`` 获取分析目标、受众、成功标准
+   - ``data/`` 下数据文件(若需要可先 ``execute_python`` 扫描查看结构)
+   - ``.anappt/s2_data_requirement.md`` 获取分析维度参考
+   - ``.anappt/s3_data_profile.md`` 获取数据 profile(若已生成)
+2. 进行初步分析推理,形成第一版结论草案。
+3. 按需调用工具进行迭代补充(可多轮):
+   - ``execute_python``:统计计算、数据透视、关联分析、按需生成图表至
+     ``output/images/``(S4 不强制生成图表;若用户要求或分析需要再生成)
+   - ``search_web``:补充行业背景、竞品数据、市场报告
+   - ``fetch_url``:读取相关网页/报告/政策文件全文
+     (若 ``fetch_url`` 工具不可用——例如未配置 JINA_API_KEY——请明确告知用户
+     并改用 ``search_web`` 提供的摘要)
+4. 整合分析结论 → 写入 ``.anappt/s4_analysis_report.md`` 草案。
+   报告以数据列表与文字结论为主,为后续 PPT 编辑留出灵活性。
+5. 提示用户复核草案并提供反馈。
+6. 接收用户反馈 → 深度推理补充 → 更新报告 → 再次提交用户确认。
+7. 循环直到用户满意,明确确认"分析结论无误,可以进入报告撰写"后输入 ``confirm``。
+
+写报告时调用 ``write_artifact(".anappt/s4_analysis_report.md", <内容>)``
+(可多次覆盖更新),使用清晰的 Markdown 结构(如执行摘要、方法、关键发现、
+详细分析、建议等章节)。
+
+在用户输入 ``confirm`` 前,你不可自行推进阶段。你不可调用本阶段未授权的工具
+(如 ``render_deck``/``export_pptx`` 等)。"""
+
 
 class S4AnalysisStage(StageBase):
     """Stage S4: Data Analysis.
@@ -26,6 +82,7 @@ class S4AnalysisStage(StageBase):
 
     stage_id: str = "S4"
     stage_name: str = "stage.s4.name"
+    goal: str = "s4.goal"
 
     def _build_tools(self, ctx: PipelineContext) -> tuple[dict, list[ToolDef]]:
         """Build the tool dictionary and definitions for the agent loop.
@@ -217,6 +274,8 @@ class S4AnalysisStage(StageBase):
     def get_artifacts(self, ctx: PipelineContext) -> list[str]:
         """Return the artifact paths for this stage.
 
+        Per design 4.4, S4 produces ``.anappt/s4_analysis_report.md``.
+
         Args:
             ctx: Pipeline context.
 
@@ -224,3 +283,60 @@ class S4AnalysisStage(StageBase):
             List containing the s4_analysis_report.md path.
         """
         return [".anappt/s4_analysis_report.md"]
+
+    def system_prompt_fragment(self, ctx: PipelineContext) -> str:
+        """Return the S4-specific system prompt fragment.
+
+        Drives the LLM to read ``report.yaml`` + ``data/`` + S2/S3 artifacts,
+        run an iterative analysis loop with code exec / web search / web fetch,
+        write the artifact and await user ``confirm``.
+
+        Args:
+            ctx: Pipeline context.
+
+        Returns:
+            Chinese system prompt fragment for S4.
+        """
+        return S4_SYSTEM_PROMPT_FRAGMENT
+
+    def tools(self, ctx: PipelineContext) -> list[str]:
+        """Return the subset of tools the LLM may use in S4.
+
+        Args:
+            ctx: Pipeline context.
+
+        Returns:
+            List of enabled tool names for S4.
+        """
+        return [
+            "read_file",
+            "write_artifact",
+            "execute_python",
+            "search_web",
+            "fetch_url",
+            "read_memory",
+            "read_history",
+        ]
+
+    def is_ready(self, ctx: PipelineContext) -> bool:
+        """Check whether S4's expected artifact is ready.
+
+        Returns True only when ``.anappt/s4_analysis_report.md`` exists
+        and is non-empty.
+
+        Args:
+            ctx: Pipeline context.
+
+        Returns:
+            True if the artifact exists and is non-empty.
+        """
+        artifact_path = ctx.project_dir / ".anappt" / "s4_analysis_report.md"
+        if not artifact_path.exists():
+            return False
+        if not artifact_path.is_file():
+            return False
+        try:
+            content = artifact_path.read_text(encoding="utf-8")
+        except OSError:
+            return False
+        return bool(content.strip())

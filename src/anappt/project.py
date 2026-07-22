@@ -10,6 +10,7 @@ import subprocess
 from pathlib import Path
 
 from anappt.i18n import t
+from anappt.io.state import StateManager
 
 # Standard project directory structure
 _PROJECT_DIRS: list[str] = [
@@ -52,33 +53,44 @@ class ProjectInitializer:
         project_dir: str | Path,
         project_name: str = "",
         init_git: bool = True,
+        in_place: bool = False,
     ) -> Path:
         """Create a new project with the standard structure.
 
         Args:
             project_dir: Path where the project will be created.
-            project_name: Name of the project (used in report.yaml).
+            project_name: Name of the project (used in report.yaml/state.yaml).
             init_git: Whether to initialize a git repository.
+            in_place: When True, initialize ``project_dir`` in place even if it
+                is non-empty (existing files/directories are skipped, only
+                missing ones are created). When False (default), raise
+                ``FileExistsError`` if the directory exists and is non-empty.
 
         Returns:
             Path to the created project directory.
 
         Raises:
-            FileExistsError: If the directory already exists and is not empty.
+            FileExistsError: If ``in_place`` is False and the directory already
+                exists and is not empty.
         """
         project_path = Path(project_dir)
 
-        # Check if directory exists and is not empty
-        if project_path.exists() and any(project_path.iterdir()):
-            raise FileExistsError(t("project.dir_exists", path=str(project_path)))
+        # Check if directory exists and is not empty (only enforced for
+        # subdirectory mode; in-place mode tolerates pre-existing content).
+        if not in_place:
+            if project_path.exists() and any(project_path.iterdir()):
+                raise FileExistsError(t("project.dir_exists", path=str(project_path)))
 
         # Create directory structure
         project_path.mkdir(parents=True, exist_ok=True)
         for dir_name in _PROJECT_DIRS:
             (project_path / dir_name).mkdir(parents=True, exist_ok=True)
 
-        # Copy template files
-        self._copy_templates(project_path, project_name)
+        # Copy template files (skip existing when in_place to avoid clobbering)
+        self._copy_templates(project_path, project_name, skip_existing=in_place)
+
+        # Write init markers: .anappt/state.yaml + .anappt/memory.md
+        self._write_init_markers(project_path, project_name)
 
         # Initialize git if requested
         if init_git:
@@ -86,12 +98,19 @@ class ProjectInitializer:
 
         return project_path
 
-    def _copy_templates(self, project_path: Path, project_name: str) -> None:
+    def _copy_templates(
+        self,
+        project_path: Path,
+        project_name: str,
+        skip_existing: bool = False,
+    ) -> None:
         """Copy template files to the project directory.
 
         Args:
             project_path: Target project directory.
             project_name: Project name to substitute in templates.
+            skip_existing: When True, do not overwrite files that already exist
+                at the target path (used for in-place initialization).
         """
         for tmpl_rel in _TEMPLATE_FILES:
             tmpl_src = self.templates_dir / tmpl_rel
@@ -102,12 +121,45 @@ class ProjectInitializer:
             target_rel = tmpl_rel.removesuffix(".tmpl")
             target_path = project_path / target_rel
 
+            if skip_existing and target_path.exists():
+                continue
+
             # Read, substitute, and write
             content = tmpl_src.read_text(encoding="utf-8")
             if project_name:
                 content = content.replace('name: ""', f'name: "{project_name}"')
             target_path.parent.mkdir(parents=True, exist_ok=True)
             target_path.write_text(content, encoding="utf-8")
+
+    def _write_init_markers(
+        self, project_path: Path, project_name: str
+    ) -> None:
+        """Write the init marker files: ``.anappt/state.yaml`` and ``.anappt/memory.md``.
+
+        ``state.yaml`` is the authoritative init marker checked by
+        :func:`is_anappt_project`. ``memory.md`` is the seed project memory
+        file (empty until the conversation pipeline updates it). Both files are
+        only written if they do not already exist, so re-running init on an
+        existing project is a no-op for these markers.
+
+        Args:
+            project_path: Target project directory.
+            project_name: Project name recorded in ``state.yaml``.
+        """
+        anappt_dir = project_path / ".anappt"
+        anappt_dir.mkdir(parents=True, exist_ok=True)
+
+        state_file = anappt_dir / "state.yaml"
+        if not state_file.exists():
+            # StateManager loads create_initial_state() when the file is
+            # absent; we then stamp the project_name and persist.
+            sm = StateManager(state_file)
+            sm.state.project_name = project_name
+            sm.save()
+
+        memory_file = anappt_dir / "memory.md"
+        if not memory_file.exists():
+            memory_file.write_text("", encoding="utf-8")
 
     def _init_git(self, project_path: Path) -> None:
         """Initialize a git repository in the project directory.
@@ -153,6 +205,7 @@ def create_project(
     project_dir: str | Path,
     project_name: str = "",
     init_git: bool = True,
+    in_place: bool = False,
 ) -> Path:
     """Create a new AnaPPTAgent project.
 
@@ -162,18 +215,25 @@ def create_project(
         project_dir: Path where the project will be created.
         project_name: Name of the project.
         init_git: Whether to initialize a git repository.
+        in_place: When True, initialize ``project_dir`` in place even if it is
+            non-empty (existing files are skipped). When False (default), raise
+            ``FileExistsError`` if the directory is non-empty.
 
     Returns:
         Path to the created project directory.
     """
     initializer = ProjectInitializer()
-    return initializer.create_project(project_dir, project_name, init_git)
+    return initializer.create_project(
+        project_dir, project_name, init_git, in_place=in_place
+    )
 
 
 def is_anappt_project(directory: str | Path) -> bool:
     """Check if a directory is an AnaPPTAgent project.
 
-    A valid project has a .anappt directory and a report.yaml file.
+    A valid project is identified solely by the presence of the init marker
+    file ``.anappt/state.yaml``. ``report.yaml`` is NOT required because S1
+    is responsible for generating it via conversation.
 
     Args:
         directory: Directory to check.
@@ -182,6 +242,5 @@ def is_anappt_project(directory: str | Path) -> bool:
         True if the directory is an AnaPPTAgent project.
     """
     directory = Path(directory)
-    anappt_dir = directory / ".anappt"
-    report_yaml = directory / "report.yaml"
-    return anappt_dir.is_dir() and report_yaml.is_file()
+    state_file = directory / ".anappt" / "state.yaml"
+    return state_file.is_file()

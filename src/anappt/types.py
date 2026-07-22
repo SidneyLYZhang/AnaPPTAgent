@@ -7,14 +7,18 @@ that stages and the orchestrator depend on.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 
 from anappt.io.config import ReportConfig
 from anappt.io.git_auto import GitAutoCommit
+from anappt.io.memory import MemoryManager
 from anappt.io.session import SessionLogger
 from anappt.io.state import StateManager
 from anappt.llm.models import ModelRole
 from anappt.llm.provider import AnaPPTLLM
+
+if TYPE_CHECKING:
+    from anappt.io.skill_manager import SkillManager
 
 
 @runtime_checkable
@@ -90,6 +94,8 @@ class PipelineContext:
         git: Git auto-commit manager.
         output_dir: Directory for stage output artifacts.
         skill_manager: Optional SkillManager instance (None when not injected).
+        memory: Optional MemoryManager for ``.anappt/memory.md`` (None when
+            not injected; e.g. in unit tests).
     """
 
     def __init__(
@@ -103,6 +109,7 @@ class PipelineContext:
         git: GitAutoCommit | None = None,
         output_dir: str | Path | None = None,
         skill_manager: SkillManager | None = None,
+        memory: MemoryManager | None = None,
     ) -> None:
         """Initialize the pipeline context.
 
@@ -116,6 +123,7 @@ class PipelineContext:
             git: Git auto-commit manager (optional).
             output_dir: Output directory (defaults to project_dir/output).
             skill_manager: Optional SkillManager instance.
+            memory: Optional MemoryManager for ``.anappt/memory.md``.
         """
         self.project_dir: Path = Path(project_dir)
         self.config: ReportConfig = config
@@ -127,6 +135,7 @@ class PipelineContext:
         self.output_dir: Path = Path(output_dir) if output_dir else self.project_dir / "output"
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.skill_manager = skill_manager
+        self.memory: MemoryManager | None = memory
 
     def get_artifact_path(self, filename: str) -> Path:
         """Get the full path for an output artifact file.

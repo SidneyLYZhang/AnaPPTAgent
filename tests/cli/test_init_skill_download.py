@@ -66,7 +66,9 @@ def _install_mock_skill_manager(monkeypatch: pytest.MonkeyPatch, **returns) -> M
 class TestInitArgParsing:
     """``cmd_init`` 参数解析测试。"""
 
-    def test_no_skill_flag_skips_skill_subflow(self, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    def test_no_skill_flag_skips_skill_subflow(
+        self, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
         """``--no-skill`` flag 应跳过整个 skill 下载子流程,SkillManager 不被实例化。"""
         mock_skill_cls = MagicMock()
         monkeypatch.setattr("anappt.io.skill_manager.SkillManager", mock_skill_cls)
@@ -112,7 +114,9 @@ class TestInitArgParsing:
         _args, kwargs = mock_mgr.install_or_update_skill.call_args
         assert kwargs.get("registry") == "https://my.registry/"
 
-    def test_missing_registry_value_returns_1(self, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    def test_missing_registry_value_returns_1(
+        self, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
         """``--registry`` 后无值时应返回 1,且 ``create_project`` 未被调用。"""
         mock_create = MagicMock(return_value=Path("/fake"))
         monkeypatch.setattr("anappt.cli.create_project", mock_create)
@@ -132,20 +136,33 @@ class TestInitArgParsing:
         assert result == 1
         mock_create.assert_not_called()
 
-    def test_no_args_prompts_for_project_name(self, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
-        """无参数时应通过 ``input`` 提示输入 project_name 并传给 ``create_project``。"""
-        monkeypatch.setattr("builtins.input", lambda *args: "interactive_proj")
+    def test_no_args_does_in_place_init(self, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+        """无参数时应原地初始化 ``Path.cwd()``,不再提示输入 project_name。
+
+        Task A1: ``anappt init`` (无名字) 在当前目录原地初始化;
+        ``create_project`` 应以 ``in_place=True`` 调用,且不调用 ``input``。
+        """
+        # Ensure cwd is a clean tmp dir without .anappt/state.yaml.
+        import tempfile
+        from pathlib import Path
+
+        clean_cwd = Path(tempfile.mkdtemp())
+        monkeypatch.chdir(clean_cwd)
+
         mock_create = MagicMock(return_value=Path("/fake"))
         monkeypatch.setattr("anappt.cli.create_project", mock_create)
+        # ``is_anappt_project`` should report False so init proceeds.
+        monkeypatch.setattr("anappt.cli.is_anappt_project", lambda d: False)
         # locate_skill 返回已安装路径,跳过下载子流程
         _install_mock_skill_manager(monkeypatch, locate_skill="/fake/SKILL.md")
 
+        # No input mock: if cmd_init calls input, the test will fail loudly.
         result = cmd_init([])
 
         assert result == 0
         mock_create.assert_called_once()
         _args, kwargs = mock_create.call_args
-        assert kwargs.get("project_name") == "interactive_proj"
+        assert kwargs.get("in_place") is True
 
 
 # ---------------------------------------------------------------------------
@@ -156,7 +173,9 @@ class TestInitArgParsing:
 class TestInitSkillDownload:
     """``cmd_init`` skill 下载子流程测试。"""
 
-    def test_skill_already_installed_skips_download(self, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    def test_skill_already_installed_skips_download(
+        self, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
         """``locate_skill`` 返回非 None 时应跳过下载,打印 '已检测到'。"""
         mock_mgr = _install_mock_skill_manager(
             monkeypatch,
@@ -221,7 +240,9 @@ class TestInitSkillDownload:
         assert "环境不满足" in captured.out
         mock_mgr.install_or_update_skill.assert_not_called()
 
-    def test_install_failure_returns_0_no_block(self, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    def test_install_failure_returns_0_no_block(
+        self, monkeypatch: pytest.MonkeyPatch, capsys
+    ) -> None:
         """``install_or_update_skill`` 抛 RuntimeError 时不阻塞,返回 0,打印 '下载失败'。"""
         mock_mgr = _install_mock_skill_manager(
             monkeypatch,
@@ -282,7 +303,10 @@ class TestProjectCreationIndependence:
     def test_project_created_before_skill_subflow(
         self, monkeypatch: pytest.MonkeyPatch, capsys, tmp_path: Path
     ) -> None:
-        """``create_project`` 应在 skill 下载之前调用,即使 skill 下载失败 create_project 仍被调用。"""
+        """``create_project`` 应在 skill 下载之前调用。
+
+        即使 skill 下载失败,``create_project`` 仍被调用。
+        """
         monkeypatch.chdir(tmp_path)
         mock_create = MagicMock(return_value=Path("/fake"))
         monkeypatch.setattr("anappt.cli.create_project", mock_create)

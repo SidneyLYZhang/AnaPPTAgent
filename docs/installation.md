@@ -141,7 +141,7 @@ uv tool run anappt --help
 uvx anappt --help
 ```
 
-期望输出包含 `anappt` 字样与子命令列表（`new`、`run`、`resume`、`status`、`config`、`interactive`）。
+期望输出包含 `anappt` 字样与子命令列表（`init`、`new`、`run`、`resume`、`status`、`config`、`interactive`、`setup`）。
 
 另外可以查看已安装的 uv 工具列表：
 

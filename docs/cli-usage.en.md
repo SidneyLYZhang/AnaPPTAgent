@@ -13,8 +13,8 @@ The CLI entry point is `anappt`, supporting the following subcommands:
 | Command | Description |
 |---------|-------------|
 | `anappt` | Shows usage help when called with no arguments |
-| `anappt new <name> [--no-skill] [--registry <url>]` | Create a new analysis project |
-| `anappt init <name> [--no-skill] [--registry <url>]` | Create a new analysis project (alias for `new`) |
+| `anappt new [<name>] [--no-skill] [--registry <url>]` | Create a new analysis project; without `<name>`, initialize the current directory in place; with `<name>`, create a same-named subdirectory under the current directory |
+| `anappt init [<name>] [--no-skill] [--registry <url>]` | Create a new analysis project (alias for `new`); also supports in-place initialization when no name is given |
 | `anappt run` | Start or resume the pipeline |
 | `anappt resume` | Resume the pipeline from current state |
 | `anappt status` | Show all stage statuses |
@@ -117,6 +117,9 @@ delivery:
 | `delivery.formats` | list | Output format list, supports `pptx` and `html` |
 | `delivery.theme_preference` | string/null | PPT theme, set to `null` to choose interactively in S6 |
 
+!!! note "Generation and override of report.yaml"
+    The `report.yaml` copied by `anappt new`/`init` is only a **placeholder template**. Once the pipeline starts, the S1 stage generates or refines `report.yaml` through conversation with the LLM (written back to the project root via the `write_artifact` tool), overwriting the placeholder fields. Template values are therefore for initial reference only; the effective content is whatever S1 produces.
+
 ## Environment Variables
 
 | Environment Variable | Description |
@@ -140,11 +143,14 @@ delivery:
 ### Create a New Project
 
 ```bash
-# Create a new project named my_report
+# Create a new project named my_report (creates a my_report/ subdirectory under the current directory)
 anappt new my_report
 
 # Use the init alias
 anappt init my_report
+
+# Without a name: initialize the current directory in place (no subdirectory created)
+anappt init
 
 # Skip dashi-ppt-skill download
 anappt new my_report --no-skill
@@ -157,28 +163,26 @@ This creates the following directory structure:
 
 ```
 my_report/
-├── report.yaml
+├── report.yaml                  # Project config (placeholder template; overwritten by S1)
 ├── .gitignore
 ├── data/
 │   └── README.md
 ├── output/
-│   ├── report.md               # S5 output: analysis report
+│   ├── final_report.md          # S5 output: analysis report
 │   ├── images/
 │   └── ppt/
-│       ├── goal.json           # S6 intermediate artifact: slide structure built by LLM
-│       ├── presentation.pptx   # S6 optional artifact: PPTX (when formats contains pptx)
-│       └── ppt/
-│           └── index.html      # S6 output: HTML slides (full path output/ppt/ppt/index.html)
+│       ├── goal.json            # S6 intermediate artifact: slide structure built by LLM
+│       ├── presentation.pptx    # S6 optional artifact: PPTX (when formats contains pptx)
+│       └── presentation.html    # S6 output: HTML slides
 └── .anappt/
-    ├── state.yaml
+    ├── state.yaml               # Project init marker
+    ├── memory.md                # Cross-stage shared memory (LLM-maintained)
     ├── s1_topic.md
     ├── s2_data_requirement.md
     ├── s3_data_profile.md
     ├── s4_analysis_report.md
-    ├── data_info.json          # S4 artifact: data structure info
-    ├── s5_report.md
     └── session_history/
-        └── S1_session.md       # Session log named by stage ID
+        └── 2024-12-01_S1.md     # Session log named "date_stage"
 ```
 
 ### Run the Pipeline
@@ -189,7 +193,7 @@ cd my_report
 anappt run
 ```
 
-The pipeline executes S1 through S6 sequentially, pausing after each stage for user review.
+This enters a **conversational TUI** where multi-turn LLM conversations drive each stage's output (topic, data requirements, analysis, report, PPT, etc.). After each stage completes, use the `confirm` meta-command to advance to the next stage; you may enter free text at any time to converse with the LLM, request changes, or add details.
 
 ### Resume the Pipeline
 
@@ -252,12 +256,27 @@ anappt setup --registry https://registry.npmmirror.com
 ### Interactive Mode
 
 ```bash
-# Start interactive mode (must be run from a project directory)
+# Start the conversational TUI (must be run from a project directory)
 anappt interactive
 ```
 
-Interactive mode provides a command loop supporting `confirm`, `status`, `config`, `reset`, `help`, `exit`, and more. See the [Interactive TUI Guide](tui-usage.md) for details.
+Interactive mode is the **conversational TUI**: entering free text starts a multi-turn conversation with the LLM that drives each stage's output. The supported meta-commands are exactly 5:
+
+| Meta-command | Action |
+|--------------|--------|
+| `confirm` | Confirm the current stage's output and advance to the next stage |
+| `exit` | Exit the conversational TUI |
+| `status` | Show the status of each stage |
+| `memory` | View/edit the cross-stage shared memory `.anappt/memory.md` |
+| `help` | Show meta-command help |
+
+See the [Interactive TUI Guide](tui-usage.md) for details.
 
 ## Session Logs
 
-Each stage produces an independent session log under `.anappt/session_history/`, named `{stage_id}_session.md` (e.g., `S1_session.md`, `S4_session.md`). The log records the conversation between the LLM and the user during that stage, useful for review and auditing.
+Each stage produces an independent session log under `.anappt/session_history/`, named `YYYY-MM-DD_<stage>.md` (UTC date, e.g., `2024-12-01_S1.md`, `2024-12-01_S4.md`). The log structure is:
+
+- `## 核心摘要` (Core Summary): an LLM-generated summary of the key points of the conversation (1-3 sentences)
+- `### 对话记录` (Dialog Record): the timestamped Agent/user conversation
+
+Useful for review and auditing.

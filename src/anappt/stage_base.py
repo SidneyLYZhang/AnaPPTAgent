@@ -2,6 +2,19 @@
 
 Each stage implements the run() method to produce output artifacts.
 Stages are executed sequentially by the Orchestrator.
+
+Stages also expose a declarative interface used by the conversation-driven
+TUI (``ConversationRunner``):
+
+    - ``goal``: i18n key describing the stage's goal (shown to LLM/user).
+    - ``get_artifacts(ctx)``: declared artifact paths relative to project root.
+    - ``system_prompt_fragment(ctx)``: stage-specific system prompt fragment.
+    - ``tools(ctx)``: subset of tool names the LLM may use in this stage.
+    - ``is_ready(ctx)``: gate check that all expected artifacts exist.
+
+The legacy ``run()`` method is preserved for backward compatibility with
+the Orchestrator-based execution path; it will be removed once the
+conversation runner is fully wired (Task C2-C4).
 """
 
 from __future__ import annotations
@@ -22,13 +35,22 @@ class StageBase(ABC):
         - stage_name: i18n key for display name
         - run(ctx): Execute the stage and return StageOutput
 
+    Declarative attributes (used by the conversation-driven TUI):
+
+        - goal: i18n key describing the stage's goal. Defaults to empty
+          string (subclass should override to a meaningful key such as
+          ``"s1.goal"``). Used to tell the LLM/user what this stage is
+          about.
+
     Attributes:
         stage_id: The stage identifier.
         stage_name: i18n key for the stage's display name.
+        goal: i18n key for the stage's goal description.
     """
 
     stage_id: str = ""
     stage_name: str = ""
+    goal: str = ""
 
     @property
     def model_role(self) -> ModelRole:
@@ -78,7 +100,8 @@ class StageBase(ABC):
     def get_artifacts(self, ctx: PipelineContext) -> list[str]:
         """Return list of artifact paths this stage produces.
 
-        Override in subclasses to provide actual paths.
+        Paths are relative to ``ctx.project_dir``. Override in subclasses
+        to provide actual paths. Empty by default.
 
         Args:
             ctx: Pipeline context.
@@ -87,6 +110,62 @@ class StageBase(ABC):
             List of artifact file names. Empty by default.
         """
         return []
+
+    def system_prompt_fragment(self, ctx: PipelineContext) -> str:
+        """Return the stage-specific system prompt fragment.
+
+        Subclasses override this to inject stage guidance into the
+        conversation runner's system prompt. The fragment is appended
+        to the generic conversation system prompt. Returns an empty
+        string by default.
+
+        Args:
+            ctx: Pipeline context.
+
+        Returns:
+            Stage-specific system prompt fragment (empty by default).
+        """
+        return ""
+
+    def tools(self, ctx: PipelineContext) -> list[str]:
+        """Return the subset of tool names the LLM may use in this stage.
+
+        Tool names are strings from the canonical set:
+        ``read_file``/``write_artifact``/``read_memory``/``read_history``/
+        ``execute_python``/``search_web``/``fetch_url``/``render_deck``/
+        ``export_pptx``/``list_stage_artifacts``.
+
+        Returns an empty list by default; subclasses override to declare
+        their usable tools.
+
+        Args:
+            ctx: Pipeline context.
+
+        Returns:
+            List of tool name strings enabled for this stage. Empty by
+            default.
+        """
+        return []
+
+    def is_ready(self, ctx: PipelineContext) -> bool:
+        """Check whether this stage's expected artifacts are ready.
+
+        The default implementation returns ``True`` if every path in
+        :meth:`get_artifacts` exists relative to ``ctx.project_dir``.
+        Subclasses override to add stronger validation (e.g. parsing
+        YAML and checking required fields).
+
+        Args:
+            ctx: Pipeline context.
+
+        Returns:
+            True if all declared artifacts exist (or the stage declares
+            no artifacts). Subclasses may strengthen this.
+        """
+        for rel_path in self.get_artifacts(ctx):
+            if not (ctx.project_dir / rel_path).exists():
+                return False
+        return True
 
     def _log_ui(self, ctx: PipelineContext, message: str) -> None:
         """Print a message to the UI if available.

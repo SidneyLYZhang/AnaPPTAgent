@@ -10,9 +10,11 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from anappt.conversation import ConversationRunner
 from anappt.i18n import t
 from anappt.io.config import ReportConfig
 from anappt.io.git_auto import GitAutoCommit
+from anappt.io.memory import MemoryManager
 from anappt.io.session import SessionLogger
 from anappt.io.state import StateManager
 from anappt.llm.provider import AnaPPTLLM, load_global_config, save_global_config
@@ -151,23 +153,29 @@ def _load_pipeline_context(
 ) -> PipelineContext:
     """Load the pipeline context for a project directory.
 
+    ``report.yaml`` is optional at this stage: when missing or unparseable,
+    an empty :class:`ReportConfig` is used as a placeholder. The S1
+    conversation stage is responsible for generating ``report.yaml``; later
+    stages will re-read it as needed.
+
     Args:
         project_dir: Path to the project directory.
         ui: Optional UI instance.
 
     Returns:
         PipelineContext ready for orchestration.
-
-    Raises:
-        FileNotFoundError: If report.yaml is not found.
     """
     project_dir = Path(project_dir)
     report_yaml_path = project_dir / "report.yaml"
-    if not report_yaml_path.exists():
-        raise FileNotFoundError(f"report.yaml not found in {project_dir}")
 
-    # Load config
-    config = ReportConfig.from_yaml(report_yaml_path)
+    # Load config — fall back to an empty ReportConfig when report.yaml is
+    # missing or unparseable. S1 (conversation) generates it later.
+    config = ReportConfig()
+    if report_yaml_path.exists():
+        try:
+            config = ReportConfig.from_yaml(report_yaml_path)
+        except Exception:
+            config = ReportConfig()
 
     # Load models config (global only — project-level models.yaml is no longer read)
     models_config = load_global_config()
@@ -198,6 +206,10 @@ def _load_pipeline_context(
     # Create git auto-commit
     git = GitAutoCommit(project_dir)
 
+    # Create project memory manager (``memory.md`` may not exist yet —
+    # MemoryManager.read() tolerates absence and returns "").
+    memory = MemoryManager(project_dir / ".anappt" / "memory.md")
+
     # Construct SkillManager (failure is non-fatal: skill_manager will be None)
     from anappt.io.skill_manager import SkillManager
     try:
@@ -215,14 +227,22 @@ def _load_pipeline_context(
         session=session,
         git=git,
         skill_manager=mgr,
+        memory=memory,
     )
 
 
 def cmd_init(args: list[str]) -> int:
     """Handle the 'init' command.
 
+    Behavior:
+      - ``anappt init`` (no name argument): initialize the current working
+        directory in place. If the directory already contains
+        ``.anappt/state.yaml``, exit with code 1.
+      - ``anappt init <name>``: create a ``<name>/`` subdirectory under the
+        current working directory and initialize it (legacy behavior).
+
     Args:
-        args: Command arguments (project name or path).
+        args: Command arguments (optional project name).
             Optional flags:
               --no-skill          Skip dashi-ppt-skill download.
               --registry <url>    npm registry URL passed to install_or_update_skill.
@@ -254,19 +274,43 @@ def cmd_init(args: list[str]) -> int:
         i += 1
 
     if project_name is None:
-        project_name = input(t("cli.project_name_prompt")).strip()
-
-    project_dir = Path.cwd() / project_name
-
-    try:
-        result_path = create_project(project_dir, project_name=project_name, init_git=True)
-        print(t("cli.new_project_created", path=str(result_path)))
-        print(t("cli.edit_report", path=str(result_path / "report.yaml")))
-        print(t("cli.put_data", path=str(result_path / "data")))
-        print(t("cli.run_to_start"))
-    except FileExistsError as e:
-        print(str(e))
-        return 1
+        # In-place init: initialize the current working directory.
+        project_dir = Path.cwd()
+        if is_anappt_project(project_dir):
+            print(t("cli.already_anappt_project", path=str(project_dir)))
+            return 1
+        # Best-effort project name from the current directory name.
+        effective_name = project_dir.name
+        try:
+            result_path = create_project(
+                project_dir,
+                project_name=effective_name,
+                init_git=True,
+                in_place=True,
+            )
+            print(t("cli.in_place_initialized", path=str(result_path)))
+            print(t("cli.edit_report", path=str(result_path / "report.yaml")))
+            print(t("cli.put_data", path=str(result_path / "data")))
+            print(t("cli.run_to_start"))
+        except FileExistsError as e:
+            print(str(e))
+            return 1
+    else:
+        # Subdirectory init: create <name>/ under cwd.
+        project_dir = Path.cwd() / project_name
+        try:
+            result_path = create_project(
+                project_dir,
+                project_name=project_name,
+                init_git=True,
+            )
+            print(t("cli.new_project_created", path=str(result_path)))
+            print(t("cli.edit_report", path=str(result_path / "report.yaml")))
+            print(t("cli.put_data", path=str(result_path / "data")))
+            print(t("cli.cd_to_start", name=project_name))
+        except FileExistsError as e:
+            print(str(e))
+            return 1
 
     # Skill download sub-flow (anappt new 集成 skill 下载)
     # Does NOT block cmd_init: project is already created; skill failures
@@ -318,13 +362,20 @@ def cmd_new(args: list[str]) -> int:
 
 
 def cmd_run(args: list[str]) -> int:
-    """Handle the 'run' command.
+    """Handle the 'run' command — delegate to ``ConversationRunner``.
+
+    Loads the project context (state + memory + LLM + git + skill manager)
+    and enters the unified conversation loop in ``run`` mode. The runner
+    drives stage entry, opening analysis, multi-turn dialog, ``confirm``
+    gating, and exit-time finalize (session summary + memory update +
+    git commit) — fully replacing the old Orchestrator.run/confirm/revise
+    path.
 
     Args:
-        args: Command arguments.
+        args: Command arguments (unused).
 
     Returns:
-        Exit code.
+        Exit code (0 for success, 1 on missing project or load error).
     """
     project_dir = Path.cwd()
 
@@ -341,31 +392,27 @@ def cmd_run(args: list[str]) -> int:
         print(str(e))
         return 1
 
-    # Create orchestrator
-    orch = Orchestrator()
-    orch.register_stages(_build_stages())
-    orch.set_context(ctx)
-
-    # Run the pipeline
     print(t("cli.pipeline_started"))
-    result = orch.run()
-
-    if result["completed"]:
-        print(t("cli.all_done"))
-        return 0
-
-    # Interactive confirm/revise loop
-    return _interactive_confirm_loop(orch, ui, result)
+    runner = ConversationRunner(ctx, mode="run", ui=ui)
+    runner.run()
+    return 0
 
 
 def cmd_resume(args: list[str]) -> int:
-    """Handle the 'resume' command.
+    """Handle the 'resume' command — delegate to ``ConversationRunner``.
+
+    In the conversational TUI model, resume and run share the same path:
+    ``ConversationRunner._enter_stage`` handles all three resume scenarios
+    (pending → in_progress, already in_progress, awaiting_review) by
+    reading the persisted stage state from ``state.yaml``. The user then
+    re-enters the conversation at the current stage and continues from
+    there. This function therefore mirrors ``cmd_run`` exactly.
 
     Args:
-        args: Command arguments.
+        args: Command arguments (unused).
 
     Returns:
-        Exit code.
+        Exit code (0 for success, 1 on missing project or load error).
     """
     project_dir = Path.cwd()
 
@@ -374,23 +421,20 @@ def cmd_resume(args: list[str]) -> int:
         return 1
 
     ui = InteractiveUI()
+    print(t("cli.loading_config"))
+
     try:
         ctx = _load_pipeline_context(project_dir, ui=ui)
     except FileNotFoundError as e:
         print(str(e))
         return 1
 
-    orch = Orchestrator()
-    orch.register_stages(_build_stages())
-    orch.set_context(ctx)
-
-    result = orch.resume()
-
-    if result["completed"]:
-        print(t("cli.all_done"))
-        return 0
-
-    return _interactive_confirm_loop(orch, ui, result)
+    print(t("cli.pipeline_started"))
+    # resume shares ConversationRunner(mode="run") with cmd_run: the
+    # runner recovers from the persisted state.yaml automatically.
+    runner = ConversationRunner(ctx, mode="run", ui=ui)
+    runner.run()
+    return 0
 
 
 def cmd_status(args: list[str]) -> int:
@@ -639,48 +683,23 @@ def cmd_setup(args: list[str]) -> int:
     return 0
 
 
-def _interactive_confirm_loop(
-    orch: Orchestrator,
-    ui: InteractiveUI,
-    result: dict[str, Any],
-) -> int:
-    """Run the interactive confirm/revise loop.
-
-    Args:
-        orch: The orchestrator instance.
-        ui: The UI instance.
-        result: Initial run result.
-
-    Returns:
-        Exit code (0 for success).
-    """
-    while not result.get("completed", False):
-        print(t("gate.confirm_prompt"))
-        user_input = ui.input("> ").strip()
-
-        if user_input.lower() == t("interactive.confirm_short"):
-            result = orch.confirm()
-        elif user_input.lower() == t("interactive.exit_cmd"):
-            break
-        else:
-            # Revision feedback
-            result = orch.revise(user_input)
-
-    if result.get("completed"):
-        print(t("cli.all_done"))
-        return 0
-
-    return 0
-
-
 def cmd_interactive(args: list[str]) -> int:
-    """Handle the 'interactive' command — start interactive mode.
+    """Handle the 'interactive' command — delegate to ``ConversationRunner``.
+
+    Loads the project context and enters the unified conversation loop in
+    ``interactive`` mode. In this mode the runner's system prompt carries
+    the full stage-state index, project memory, recent session-history
+    index, and a current-artifacts listing, so the LLM self-identifies
+    what the user most needs to do next and proactively prompts. The old
+    simple status/config/reset/help sub-command loop is removed; the
+    ``status`` / ``memory`` / ``help`` / ``confirm`` / ``exit`` meta-
+    commands remain available inside ``ConversationRunner``.
 
     Args:
-        args: Command arguments.
+        args: Command arguments (unused).
 
     Returns:
-        Exit code.
+        Exit code (0 for success, 1 on missing project or load error).
     """
     project_dir = Path.cwd()
 
@@ -697,42 +716,8 @@ def cmd_interactive(args: list[str]) -> int:
         ui.print(str(e))
         return 1
 
-    orch = Orchestrator()
-    orch.register_stages(_build_stages())
-    orch.set_context(ctx)
-
-    while True:
-        ui.print(t("interactive.exit_prompt"))
-        user_input = ui.input("> ").strip().lower()
-
-        if user_input == t("interactive.exit_cmd"):
-            ui.print(t("interactive.exiting"))
-            # Final git commit on exit
-            if ctx.git is not None:
-                ctx.git.commit_on_exit()
-            break
-        elif user_input == t("interactive.status_cmd"):
-            status = orch.get_status()
-            headers = ["ID", "Name", "Status", "Iter"]
-            rows = [[s["id"], s["name"], s["status"], str(s["iteration"])] for s in status]
-            ui.table(headers, rows)
-        elif user_input == t("interactive.config_cmd"):
-            cmd_config(["show"])
-        elif user_input == t("interactive.reset_cmd"):
-            orch.reset()
-            ui.print(t("orchestrator.resetting"))
-        elif user_input == t("interactive.help_cmd"):
-            ui.print(t("interactive.help_text"))
-        elif user_input == t("interactive.confirm_short"):
-            orch.confirm()
-        else:
-            # Try running the pipeline
-            result = orch.run()
-            if result.get("completed"):
-                ui.print(t("cli.all_done"))
-                break
-            _interactive_confirm_loop(orch, ui, result)
-
+    runner = ConversationRunner(ctx, mode="interactive", ui=ui)
+    runner.run()
     return 0
 
 
@@ -763,8 +748,14 @@ def main(argv: list[str] | None = None) -> int:
 
     if not argv:
         print(t("cli.usage"))
-        print(f"  anappt init <project_name> [--no-skill] [--registry <url>]    {t('cli.command_init')}")
-        print(f"  anappt new <project_name> [--no-skill] [--registry <url>]     {t('cli.command_init')}")
+        print(
+            f"  anappt init [project_name] [--no-skill] [--registry <url>]    "
+            f"{t('cli.command_init')}"
+        )
+        print(
+            f"  anappt new [project_name] [--no-skill] [--registry <url>]     "
+            f"{t('cli.command_init')}"
+        )
         print(f"  anappt run                    {t('cli.command_run')}")
         print(f"  anappt resume                 {t('cli.command_resume')}")
         print(f"  anappt status                 {t('cli.command_status')}")

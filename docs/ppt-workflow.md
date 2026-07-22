@@ -9,7 +9,7 @@ dashi-ppt-skill 通过 `anappt setup` 命令安装到 `~/.anappt/skills/dashi-pp
 ## 流程图
 
 ```
-output/report.md (S5 产物)
+output/final_report.md (S5 产物)
         │
         ▼
 ┌──────────────────────┐
@@ -28,11 +28,11 @@ output/report.md (S5 产物)
 └──────────────────────┘
         │
         ▼
-output/ppt/ppt/index.html
+output/ppt/presentation.html
         │
         ▼
    [审核门控]
-   confirm / revise
+   confirm
 ```
 
 ## 前置依赖
@@ -50,16 +50,17 @@ output/ppt/ppt/index.html
 
 **模型角色**：writing（写作型）
 
-**输入**：`output/report.md`（S5 分析报告，实际读取顺序为 `final_report.md` → `report.md`）
+**输入**：`output/final_report.md`（S5 分析报告）+ `report.yaml`
 
 **输出**：
 
-- `output/ppt/ppt/index.html`（主产物：自包含 HTML 演示文稿）
+- `output/ppt/presentation.html`（主产物：自包含 HTML 演示文稿）
+- `output/ppt/goal.json`（中间产物：LLM 构造的幻灯片结构定义）
 - `output/ppt/presentation.pptx`（可选产物：仅当 `delivery.formats` 含 `pptx` 时生成）
 
 ## 7 步工作流
 
-S6 阶段由 `S6PPTStage.run()` 实现，完整流程如下：
+S6 阶段由 LLM 在对话中按 `S6_SYSTEM_PROMPT_FRAGMENT` 驱动 7 步，完整流程如下：
 
 ### 步骤 1：前置 skill 检查
 
@@ -85,7 +86,7 @@ S6 阶段由 `S6PPTStage.run()` 实现，完整流程如下：
 ### 步骤 4：构造 goal.json
 
 - LLM 在 writing 角色下，以 SKILL.md 为 system prompt，结合以下信息构造 goal.json：
-  - 报告内容（`output/report.md` 全文）
+  - 报告内容（`output/final_report.md` 全文）
   - themePack 名称
   - 项目名（`config.project.name`）
   - 页数（`config.delivery.ppt_pages`，默认 10）
@@ -97,7 +98,7 @@ S6 阶段由 `S6PPTStage.run()` 实现，完整流程如下：
 
 - 调用 `DashiPPTBridge.render_deck(goal_json_path, output_html_path, skill_root)`
 - bridge 在 Windows 下调用 `scripts/render_goal_deck.ps1`，Unix 下调用 `scripts/render_goal_deck.sh`
-- 渲染结果写入 `output/ppt/ppt/index.html`
+- 渲染结果写入 `output/ppt/presentation.html`
 - 若脚本缺失或返回非零退出码，返回 `next_action="retry"`
 
 ### 步骤 6：可选导出 PPTX
@@ -147,30 +148,30 @@ delivery:
 
 | 文件 | 说明 |
 |------|------|
-| `output/ppt/ppt/index.html` | 主产物：自包含 HTML 演示文稿 |
+| `output/ppt/presentation.html` | 主产物：自包含 HTML 演示文稿 |
 | `output/ppt/goal.json` | 中间产物：LLM 构造的幻灯片结构定义 |
 | `output/ppt/presentation.pptx` | 可选产物：PPTX 文件（当 `delivery.formats` 含 `pptx` 时） |
 
 ## 打开演示文稿
 
-浏览器直接打开 `output/ppt/ppt/index.html`，或访问预览地址 `http://127.0.0.1:5200/`。
+浏览器直接打开 `output/ppt/presentation.html`，或访问预览地址 `http://127.0.0.1:5200/`。
 
 ```bash
 # Windows
-start output/ppt/ppt/index.html
+start output/ppt/presentation.html
 
 # macOS
-open output/ppt/ppt/index.html
+open output/ppt/presentation.html
 
 # Linux
-xdg-open output/ppt/ppt/index.html
+xdg-open output/ppt/presentation.html
 ```
 
 ## 导出为 PDF
 
 在浏览器中打开演示文稿后，使用浏览器的打印功能导出 PDF：
 
-1. 打开 `output/ppt/ppt/index.html` 或访问 `http://127.0.0.1:5200/`
+1. 打开 `output/ppt/presentation.html` 或访问 `http://127.0.0.1:5200/`
 2. 按 `Ctrl+P`（Windows）或 `Cmd+P`（macOS）
 3. 选择"保存为 PDF"作为目标
 4. 建议设置：
@@ -190,6 +191,6 @@ S6 完成后，用户应在浏览器中检查：
 
 如果不满意，可以：
 
-1. 在 CLI 输入修改意见，重新运行 S6
-2. 修改 `output/report.md` 后重新运行 S6
+1. 在对话内以自由文本反馈修改意见，LLM 修订 goal.json 后重渲
+2. 修改 `output/final_report.md` 后重新运行 S6
 3. 手动编辑 `output/ppt/goal.json` 后单独运行渲染脚本

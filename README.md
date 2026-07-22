@@ -30,11 +30,12 @@ Prefer manual steps? See the [Installation Guide](https://sidneylyzhang.github.i
 anappt config set          # Configure your LLM models (OpenAI, Anthropic, DeepSeek, etc.)
 anappt new my_report       # Create a new project
 cd my_report
-# Edit report.yaml, place data files in data/
-anappt run                 # Run the six-stage pipeline
+# Place your data files in data/
+anappt run                 # Start the six-stage pipeline
+# In S1, chat with the LLM to define topic/audience/objectives — it generates report.yaml
 ```
 
-Each stage pauses for your review (`confirm` to proceed, or type revision feedback).
+Each stage pauses for your review (`confirm` to proceed, or type revision feedback). Final artifacts land in `output/final_report.md` (S5) and `output/ppt/presentation.html` (S6).
 
 ## Documentation
 

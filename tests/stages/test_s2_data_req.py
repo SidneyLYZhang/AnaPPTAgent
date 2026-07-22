@@ -136,3 +136,164 @@ class TestS2Prerequisites:
         state.transition("S1", StageStatus.AWAITING_REVIEW)
         state.transition("S1", StageStatus.COMPLETED)
         assert stage.validate_prerequisites(state) is True
+
+
+# ---------------------------------------------------------------------------
+# Declarative metadata tests (Task B3)
+# ---------------------------------------------------------------------------
+
+
+class TestS2Declarative:
+    """Tests for the declarative interface added in Task B3."""
+
+    def test_goal_is_s2_goal_key(self) -> None:
+        assert S2DataRequirementStage().goal == "s2.goal"
+
+    def test_goal_i18n_resolves(self) -> None:
+        """``s2.goal`` should resolve to a non-empty localized string."""
+        from anappt.i18n import set_locale, t
+
+        set_locale("zh")
+        text = t(S2DataRequirementStage().goal)
+        assert text
+        assert text != "s2.goal"  # not a missing-key fallback
+
+    def test_get_artifacts_returns_s2_data_requirement(
+        self, tmp_path: Path
+    ) -> None:
+        """get_artifacts returns the expected S2 artifact path."""
+        empty_config = ReportConfig()
+        state = StateManager(tmp_path / ".anappt" / "state.yaml")
+        ctx = PipelineContext(
+            project_dir=tmp_path,
+            config=empty_config,
+            llm=MagicMock(),
+            state=state,
+        )
+        artifacts = S2DataRequirementStage().get_artifacts(ctx)
+        assert artifacts == [".anappt/s2_data_requirement.md"]
+
+    def test_system_prompt_fragment_nonempty(self, tmp_path: Path) -> None:
+        empty_config = ReportConfig()
+        state = StateManager(tmp_path / ".anappt" / "state.yaml")
+        ctx = PipelineContext(
+            project_dir=tmp_path,
+            config=empty_config,
+            llm=MagicMock(),
+            state=state,
+        )
+        fragment = S2DataRequirementStage().system_prompt_fragment(ctx)
+        assert isinstance(fragment, str)
+        assert len(fragment) > 0
+
+    def test_system_prompt_fragment_contains_key_actions(
+        self, tmp_path: Path
+    ) -> None:
+        """The prompt must mention the key S2 actions per spec B3."""
+        empty_config = ReportConfig()
+        state = StateManager(tmp_path / ".anappt" / "state.yaml")
+        ctx = PipelineContext(
+            project_dir=tmp_path,
+            config=empty_config,
+            llm=MagicMock(),
+            state=state,
+        )
+        fragment = S2DataRequirementStage().system_prompt_fragment(ctx)
+        # Spec B3: derive data requirements (数据需求) from analysis needs.
+        assert "数据需求" in fragment
+        # Must mention reading report.yaml and s1_topic.md.
+        assert "report.yaml" in fragment
+        assert "s1_topic.md" in fragment
+        # Must mention the artifact to write.
+        assert "s2_data_requirement.md" in fragment
+        # Must instruct the LLM to wait for user confirm.
+        assert "confirm" in fragment
+        # Must explicitly say not to check data existence.
+        assert "不检查数据是否实际存在" in fragment or "不检查数据是否存在" in fragment
+
+    def test_system_prompt_fragment_contains_write_artifact_guidance(
+        self, tmp_path: Path
+    ) -> None:
+        empty_config = ReportConfig()
+        state = StateManager(tmp_path / ".anappt" / "state.yaml")
+        ctx = PipelineContext(
+            project_dir=tmp_path,
+            config=empty_config,
+            llm=MagicMock(),
+            state=state,
+        )
+        fragment = S2DataRequirementStage().system_prompt_fragment(ctx)
+        assert "write_artifact" in fragment
+
+    def test_tools_returns_expected_subset(self, tmp_path: Path) -> None:
+        empty_config = ReportConfig()
+        state = StateManager(tmp_path / ".anappt" / "state.yaml")
+        ctx = PipelineContext(
+            project_dir=tmp_path,
+            config=empty_config,
+            llm=MagicMock(),
+            state=state,
+        )
+        tools = S2DataRequirementStage().tools(ctx)
+        assert tools == ["read_file", "write_artifact", "read_memory", "read_history"]
+
+    def test_is_ready_false_when_artifact_missing(self, tmp_path: Path) -> None:
+        """Empty project dir → artifact missing → is_ready False."""
+        empty_config = ReportConfig()
+        state = StateManager(tmp_path / ".anappt" / "state.yaml")
+        ctx = PipelineContext(
+            project_dir=tmp_path,
+            config=empty_config,
+            llm=MagicMock(),
+            state=state,
+        )
+        assert S2DataRequirementStage().is_ready(ctx) is False
+
+    def test_is_ready_false_when_artifact_empty(self, tmp_path: Path) -> None:
+        """Artifact exists but is empty → False."""
+        empty_config = ReportConfig()
+        state = StateManager(tmp_path / ".anappt" / "state.yaml")
+        ctx = PipelineContext(
+            project_dir=tmp_path,
+            config=empty_config,
+            llm=MagicMock(),
+            state=state,
+        )
+        artifact_path = tmp_path / ".anappt" / "s2_data_requirement.md"
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text("   \n  \n", encoding="utf-8")
+        assert S2DataRequirementStage().is_ready(ctx) is False
+
+    def test_is_ready_false_when_no_heading_or_list_item(
+        self, tmp_path: Path
+    ) -> None:
+        """Artifact has plain text but no heading or list item → False."""
+        empty_config = ReportConfig()
+        state = StateManager(tmp_path / ".anappt" / "state.yaml")
+        ctx = PipelineContext(
+            project_dir=tmp_path,
+            config=empty_config,
+            llm=MagicMock(),
+            state=state,
+        )
+        artifact_path = tmp_path / ".anappt" / "s2_data_requirement.md"
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text(
+            "这是一段纯文本没有标题也没有列表项", encoding="utf-8"
+        )
+        assert S2DataRequirementStage().is_ready(ctx) is False
+
+    def test_is_ready_true_when_artifact_nonempty(self, tmp_path: Path) -> None:
+        """Artifact exists with non-empty content → True."""
+        empty_config = ReportConfig()
+        state = StateManager(tmp_path / ".anappt" / "state.yaml")
+        ctx = PipelineContext(
+            project_dir=tmp_path,
+            config=empty_config,
+            llm=MagicMock(),
+            state=state,
+        )
+        artifact_path = tmp_path / ".anappt" / "s2_data_requirement.md"
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text("# 数据需求清单\n\n内容", encoding="utf-8")
+        assert S2DataRequirementStage().is_ready(ctx) is True

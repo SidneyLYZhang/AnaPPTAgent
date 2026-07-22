@@ -9,7 +9,7 @@ The dashi-ppt-skill is installed to `~/.anappt/skills/dashi-ppt/` via the `anapp
 ## Flow Diagram
 
 ```
-output/report.md (S5 output)
+output/final_report.md (S5 output)
         │
         ▼
 ┌──────────────────────┐
@@ -28,11 +28,11 @@ output/report.md (S5 output)
 └──────────────────────┘
         │
         ▼
-output/ppt/ppt/index.html
+output/ppt/presentation.html
         │
         ▼
    [Review Gate]
-   confirm / revise
+   confirm
 ```
 
 ## Prerequisites
@@ -50,16 +50,17 @@ If `anappt setup` detects that the environment does not meet the requirements (m
 
 **Model Role**: writing
 
-**Input**: `output/report.md` (S5 analysis report; actual read order is `final_report.md` → `report.md`)
+**Input**: `output/final_report.md` (S5 analysis report) + `report.yaml`
 
 **Output**:
 
-- `output/ppt/ppt/index.html` (main artifact: self-contained HTML presentation)
+- `output/ppt/presentation.html` (main artifact: self-contained HTML presentation)
+- `output/ppt/goal.json` (intermediate artifact: slide structure definition constructed by the LLM)
 - `output/ppt/presentation.pptx` (optional artifact: only generated when `delivery.formats` contains `pptx`)
 
 ## 7-Step Workflow
 
-S6 is implemented by `S6PPTStage.run()`. The full flow is as follows:
+S6 is driven by the LLM in conversation following `S6_SYSTEM_PROMPT_FRAGMENT`. The full flow is as follows:
 
 ### Step 1: Skill Pre-check
 
@@ -85,7 +86,7 @@ S6 is implemented by `S6PPTStage.run()`. The full flow is as follows:
 ### Step 4: Construct goal.json
 
 - The LLM, acting in the writing role with SKILL.md as system prompt, constructs goal.json from:
-  - The full report content (`output/report.md`)
+  - The full report content (`output/final_report.md`)
   - The themePack name
   - The project name (`config.project.name`)
   - The page count (`config.delivery.ppt_pages`, default 10)
@@ -97,7 +98,7 @@ S6 is implemented by `S6PPTStage.run()`. The full flow is as follows:
 
 - Call `DashiPPTBridge.render_deck(goal_json_path, output_html_path, skill_root)`
 - The bridge invokes `scripts/render_goal_deck.ps1` on Windows or `scripts/render_goal_deck.sh` on Unix
-- The render output is written to `output/ppt/ppt/index.html`
+- The render output is written to `output/ppt/presentation.html`
 - If the script is missing or exits with a non-zero code, return `next_action="retry"`
 
 ### Step 6: Optional PPTX Export
@@ -147,30 +148,30 @@ delivery:
 
 | File | Description |
 |------|-------------|
-| `output/ppt/ppt/index.html` | Main artifact: self-contained HTML presentation |
+| `output/ppt/presentation.html` | Main artifact: self-contained HTML presentation |
 | `output/ppt/goal.json` | Intermediate artifact: slide structure definition constructed by the LLM |
 | `output/ppt/presentation.pptx` | Optional artifact: PPTX file (when `delivery.formats` contains `pptx`) |
 
 ## Opening the Presentation
 
-Open `output/ppt/ppt/index.html` directly in a browser, or visit the preview URL `http://127.0.0.1:5200/`.
+Open `output/ppt/presentation.html` directly in a browser, or visit the preview URL `http://127.0.0.1:5200/`.
 
 ```bash
 # Windows
-start output/ppt/ppt/index.html
+start output/ppt/presentation.html
 
 # macOS
-open output/ppt/ppt/index.html
+open output/ppt/presentation.html
 
 # Linux
-xdg-open output/ppt/ppt/index.html
+xdg-open output/ppt/presentation.html
 ```
 
 ## Exporting to PDF
 
 After opening the presentation in a browser, use the browser's print function to export a PDF:
 
-1. Open `output/ppt/ppt/index.html` or visit `http://127.0.0.1:5200/`
+1. Open `output/ppt/presentation.html` or visit `http://127.0.0.1:5200/`
 2. Press `Ctrl+P` (Windows) or `Cmd+P` (macOS)
 3. Select "Save as PDF" as the destination
 4. Recommended settings:
@@ -190,6 +191,6 @@ After S6 completes, the user should review in the browser:
 
 If unsatisfied, you can:
 
-1. Provide revision feedback in the CLI to re-run S6
-2. Modify `output/report.md` and re-run S6
+1. Provide revision feedback as free text in the conversation; the LLM revises goal.json and re-renders
+2. Modify `output/final_report.md` and re-run S6
 3. Manually edit `output/ppt/goal.json` and run the render script separately

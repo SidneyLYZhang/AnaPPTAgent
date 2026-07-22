@@ -114,7 +114,7 @@ wheels = [
 
 [[package]]
 name = "anappt"
-version = "0.1.0"
+version = "0.2.7"
 source = { editable = "." }
 dependencies = [
     { name = "ddgs" },

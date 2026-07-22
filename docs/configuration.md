@@ -11,7 +11,7 @@ AnaPPTAgent 的所有 LLM 与 Web 能力配置集中在一个**全局唯一**的
 |------|-----|
 | 文件路径 | `~/.anappt/models.yaml`(`~` 即用户主目录) |
 | 创建方式 | `anappt config set` 交互式生成,或手动创建 |
-| 读取时机 | 每次运行 `anappt run` / `resume` / `config show` 时加载 |
+| 读取时机 | 每次运行 `anappt run` / `resume` / `interactive` / `config show` 时加载 |
 | 写入时机 | `anappt config set` 完成交互后写入 |
 
 !!! warning "项目级 models.yaml 不再生效"

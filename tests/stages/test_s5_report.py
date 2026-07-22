@@ -113,8 +113,7 @@ class TestS5Run:
     def test_get_artifacts(self, ctx: PipelineContext) -> None:
         stage = S5ReportStage()
         artifacts = stage.get_artifacts(ctx)
-        assert "output/report.md" in artifacts
-        assert ".anappt/s5_report.md" in artifacts
+        assert "output/final_report.md" in artifacts
 
     def test_report_path_in_data(self, ctx: PipelineContext) -> None:
         stage = S5ReportStage()
@@ -141,3 +140,108 @@ class TestS5Prerequisites:
             state.transition(sid, StageStatus.COMPLETED)
 
         assert stage.validate_prerequisites(state) is True
+
+
+# ---------------------------------------------------------------------------
+# Declarative metadata tests (Task B6)
+# ---------------------------------------------------------------------------
+
+
+def _make_empty_ctx(tmp_path: Path) -> PipelineContext:
+    """Return a PipelineContext with an empty ReportConfig."""
+    empty_config = ReportConfig()
+    state = StateManager(tmp_path / ".anappt" / "state.yaml")
+    return PipelineContext(
+        project_dir=tmp_path,
+        config=empty_config,
+        llm=MagicMock(),
+        state=state,
+    )
+
+
+class TestS5Declarative:
+    """Tests for the declarative interface added in Task B6."""
+
+    def test_goal_is_s5_goal_key(self) -> None:
+        assert S5ReportStage().goal == "s5.goal"
+
+    def test_goal_i18n_resolves(self) -> None:
+        """``s5.goal`` should resolve to a non-empty localized string."""
+        from anappt.i18n import set_locale, t
+
+        set_locale("zh")
+        text = t(S5ReportStage().goal)
+        assert text
+        assert text != "s5.goal"  # not a missing-key fallback
+
+    def test_get_artifacts_returns_final_report(self, tmp_path: Path) -> None:
+        """get_artifacts returns the expected S5 artifact path."""
+        ctx = _make_empty_ctx(tmp_path)
+        artifacts = S5ReportStage().get_artifacts(ctx)
+        assert artifacts == ["output/final_report.md"]
+
+    def test_system_prompt_fragment_nonempty(self, tmp_path: Path) -> None:
+        ctx = _make_empty_ctx(tmp_path)
+        fragment = S5ReportStage().system_prompt_fragment(ctx)
+        assert isinstance(fragment, str)
+        assert len(fragment) > 0
+
+    def test_system_prompt_fragment_contains_key_actions(
+        self, tmp_path: Path
+    ) -> None:
+        """The prompt must mention the key S5 actions per spec B6."""
+        ctx = _make_empty_ctx(tmp_path)
+        fragment = S5ReportStage().system_prompt_fragment(ctx)
+        # Spec B6: produce final_report.md with standard structure.
+        assert "final_report.md" in fragment
+        assert "结构" in fragment
+        # Must instruct the LLM to wait for user confirm.
+        assert "confirm" in fragment
+
+    def test_system_prompt_fragment_contains_write_artifact_guidance(
+        self, tmp_path: Path
+    ) -> None:
+        ctx = _make_empty_ctx(tmp_path)
+        fragment = S5ReportStage().system_prompt_fragment(ctx)
+        assert "write_artifact" in fragment
+
+    def test_tools_returns_expected_subset(self, tmp_path: Path) -> None:
+        ctx = _make_empty_ctx(tmp_path)
+        tools = S5ReportStage().tools(ctx)
+        assert tools == ["read_file", "write_artifact", "read_memory", "read_history"]
+
+    def test_is_ready_false_when_artifact_missing(self, tmp_path: Path) -> None:
+        """Empty project dir → artifact missing → is_ready False."""
+        ctx = _make_empty_ctx(tmp_path)
+        assert S5ReportStage().is_ready(ctx) is False
+
+    def test_is_ready_false_when_artifact_empty(self, tmp_path: Path) -> None:
+        """Artifact exists but is empty → False."""
+        ctx = _make_empty_ctx(tmp_path)
+        artifact_path = tmp_path / "output" / "final_report.md"
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text("   \n  \n", encoding="utf-8")
+        assert S5ReportStage().is_ready(ctx) is False
+
+    def test_is_ready_false_when_fewer_than_2_h1_headings(
+        self, tmp_path: Path
+    ) -> None:
+        """Artifact has only 1 H1 heading → False (spec requires ≥ 2)."""
+        ctx = _make_empty_ctx(tmp_path)
+        artifact_path = tmp_path / "output" / "final_report.md"
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text(
+            "# Final Report\n\nOnly one heading.", encoding="utf-8"
+        )
+        assert S5ReportStage().is_ready(ctx) is False
+
+    def test_is_ready_true_when_artifact_nonempty(self, tmp_path: Path) -> None:
+        """Artifact exists with ≥ 2 H1 headings → True."""
+        ctx = _make_empty_ctx(tmp_path)
+        artifact_path = tmp_path / "output" / "final_report.md"
+        artifact_path.parent.mkdir(parents=True, exist_ok=True)
+        artifact_path.write_text(
+            "# Final Report\n\n内容\n\n## 子标题\n\n# 附录\n\n数据说明",
+            encoding="utf-8",
+        )
+        assert S5ReportStage().is_ready(ctx) is True
