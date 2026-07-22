@@ -90,7 +90,7 @@ class TestChat:
         mock_litellm.completion.assert_called_once()
 
         call_kwargs = mock_litellm.completion.call_args
-        assert call_kwargs.kwargs["model"] == "deepseek-reasoner"
+        assert call_kwargs.kwargs["model"] == "deepseek/deepseek-reasoner"
         assert call_kwargs.kwargs["api_key"] == "test-key-r"
 
     @patch("anappt.llm.provider.litellm")
@@ -108,9 +108,11 @@ class TestChat:
 
     @patch("anappt.llm.provider.litellm")
     def test_chat_with_api_base(self, mock_litellm):
+        # Custom OpenAI-compatible endpoint: provider "openai" + api_base is the
+        # standard litellm pattern; the model gets the "openai/" prefix.
         config = ModelsConfig(
             reasoning=ModelRoleConfig(
-                provider="custom",
+                provider="openai",
                 model="custom-model",
                 api_base="https://custom.api.com/v1",
                 api_key="key",
@@ -126,6 +128,7 @@ class TestChat:
         llm.chat("reasoning", [{"role": "user", "content": "test"}])
 
         call_kwargs = mock_litellm.completion.call_args
+        assert call_kwargs.kwargs["model"] == "openai/custom-model"
         assert call_kwargs.kwargs["api_base"] == "https://custom.api.com/v1"
 
     @patch("anappt.llm.provider.litellm")
@@ -309,6 +312,57 @@ class TestThinkingMapping:
         llm.chat("reasoning", [{"role": "user", "content": "hi"}], reasoning_effort="low")
         call_kwargs = mock_litellm.completion.call_args.kwargs
         assert call_kwargs["reasoning_effort"] == "low"
+
+
+class TestProviderPrefix:
+    """Test provider/model prefix construction for litellm routing."""
+
+    def _make_llm(self, provider: str, model: str) -> AnaPPTLLM:
+        """Build an AnaPPTLLM whose reasoning role uses the given provider/model."""
+        config = ModelsConfig(
+            reasoning=ModelRoleConfig(provider=provider, model=model, api_key="k")
+        )
+        return AnaPPTLLM(config)
+
+    def _mock_completion(self, mock_litellm: Any) -> None:
+        """Wire a minimal mock response into the patched litellm module."""
+        mock_response = MagicMock()
+        mock_response.choices = [MagicMock()]
+        mock_response.choices[0].message.content = "ok"
+        mock_litellm.completion.return_value = mock_response
+
+    @patch("anappt.llm.provider.litellm")
+    def test_prefix_added_for_non_whitelist_model(self, mock_litellm):
+        # The user's actual failure: deepseek + deepseek-v4-pro. Without the
+        # prefix litellm raises BadRequestError: LLM Provider NOT provided.
+        llm = self._make_llm("deepseek", "deepseek-v4-pro")
+        self._mock_completion(mock_litellm)
+
+        llm.chat("reasoning", [{"role": "user", "content": "hi"}])
+        assert (
+            mock_litellm.completion.call_args.kwargs["model"]
+            == "deepseek/deepseek-v4-pro"
+        )
+
+    @patch("anappt.llm.provider.litellm")
+    def test_no_double_prefix_when_model_has_slash(self, mock_litellm):
+        llm = self._make_llm("deepseek", "deepseek/deepseek-chat")
+        self._mock_completion(mock_litellm)
+
+        llm.chat("reasoning", [{"role": "user", "content": "hi"}])
+        assert (
+            mock_litellm.completion.call_args.kwargs["model"]
+            == "deepseek/deepseek-chat"
+        )
+
+    @patch("anappt.llm.provider.litellm")
+    def test_no_prefix_when_provider_empty(self, mock_litellm):
+        # Empty provider falls back to litellm's built-in pattern matching.
+        llm = self._make_llm("", "gpt-4o")
+        self._mock_completion(mock_litellm)
+
+        llm.chat("reasoning", [{"role": "user", "content": "hi"}])
+        assert mock_litellm.completion.call_args.kwargs["model"] == "gpt-4o"
 
 
 class TestGlobalConfig:

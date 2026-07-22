@@ -57,6 +57,14 @@ class AnaPPTLLM:
     ) -> dict[str, Any]:
         """Build parameters for litellm.completion() call.
 
+        LiteLLM routes a request to the correct provider via the
+        ``"provider/model"`` model identifier. When ``provider`` is set and
+        ``model`` does not already contain a ``/``, the provider is prepended
+        (e.g. ``deepseek`` + ``deepseek-v4-pro`` → ``deepseek/deepseek-v4-pro``).
+        If the user already wrote ``"provider/model"`` in ``model`` it is left
+        untouched; an empty ``provider`` falls back to litellm's built-in
+        pattern matching (e.g. ``gpt-4o`` → openai).
+
         Args:
             role_config: The model configuration for this role.
             **kwargs: Additional parameters to pass through.
@@ -64,8 +72,12 @@ class AnaPPTLLM:
         Returns:
             Dictionary of parameters for litellm.completion().
         """
+        model = role_config.model
+        if role_config.provider and "/" not in model:
+            model = f"{role_config.provider}/{model}"
+
         params: dict[str, Any] = {
-            "model": role_config.model,
+            "model": model,
         }
         if role_config.api_key:
             params["api_key"] = role_config.api_key
