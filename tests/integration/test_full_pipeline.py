@@ -371,7 +371,7 @@ class _FakeUI:
     """In-memory UI mock satisfying InteractiveUIProtocol.
 
     ``input`` returns successive strings from ``inputs``; once the
-    queue is empty it returns ``"exit"`` to avoid infinite loops.
+    queue is empty it returns ``"/exit"`` to avoid infinite loops.
     """
 
     def __init__(self, inputs: list[str] | None = None) -> None:
@@ -384,7 +384,7 @@ class _FakeUI:
     def input(self, prompt: str) -> str:
         if self.inputs:
             return self.inputs.pop(0)
-        return "exit"
+        return "/exit"
 
     def confirm(self, prompt: str) -> bool:
         return True
@@ -589,14 +589,14 @@ class TestConversationDrivenPipeline:
         1. Create project with create_project() (includes report.yaml + git)
         2. Mock LLM writes stage artifacts via write_artifact tool_calls
            at each opening; S6 also calls render_deck
-        3. User inputs 'confirm' 6 times to advance S1-S6
+        3. User inputs '/confirm' 6 times to advance S1-S6
         4. Verify all output files, state, session history, and git commits
         """
         project_dir = integration_project
         llm = _make_full_pipeline_llm()
         # 6 confirms advance S1-S6; pipeline completes after S6 confirm
         # (sets _exit=True), so no explicit 'exit' is needed.
-        ui = _FakeUI(inputs=["confirm"] * 6)
+        ui = _FakeUI(inputs=["/confirm"] * 6)
         ctx = _build_conversation_ctx(project_dir, llm, ui)
 
         # Patch DashiPPTBridge at the source module so the render_deck
@@ -690,7 +690,7 @@ class TestConversationDrivenPipeline:
         LLM-generated core summary at the top (## 核心摘要)."""
         project_dir = integration_project
         llm = _make_full_pipeline_llm()
-        ui = _FakeUI(inputs=["confirm"] * 6)
+        ui = _FakeUI(inputs=["/confirm"] * 6)
         ctx = _build_conversation_ctx(project_dir, llm, ui)
 
         with patch("anappt.bridge.dashi_ppt.DashiPPTBridge") as mock_bridge:

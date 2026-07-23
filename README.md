@@ -35,7 +35,7 @@ anappt run                 # Start the six-stage pipeline
 # In S1, chat with the LLM to define topic/audience/objectives — it generates report.yaml
 ```
 
-Each stage pauses for your review (`confirm` to proceed, or type revision feedback). Final artifacts land in `output/final_report.md` (S5) and `output/ppt/presentation.html` (S6).
+Each stage pauses for your review (`/confirm` to proceed, or type revision feedback). The TUI streams LLM output with a live thinking bar; meta-commands all start with `/` (e.g. `/confirm`, `/exit`, `/help`), and `/ppt <requirement>` skips the prep stages to generate a deck directly. Final artifacts land in `output/final_report.md` (S5) and `output/ppt/presentation.html` (S6).
 
 ## Documentation
 

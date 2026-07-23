@@ -1,6 +1,8 @@
 """Tests for the i18n module."""
 
 
+import json
+
 import pytest
 
 from anappt import i18n
@@ -100,3 +102,43 @@ class TestTranslation:
         # Should not crash, should return the text as-is
         result = i18n.t("cli.new_project_created")
         assert isinstance(result, str)
+
+
+class TestLocaleConsistency:
+    """Test that zh and en locales are consistent."""
+
+    @pytest.fixture
+    def zh_messages(self):
+        locale_file = i18n._LOCALES_DIR / "zh.json"
+        with open(locale_file, encoding="utf-8") as f:
+            return json.load(f)
+
+    @pytest.fixture
+    def en_messages(self):
+        locale_file = i18n._LOCALES_DIR / "en.json"
+        with open(locale_file, encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_zh_en_keys_aligned(self, zh_messages, en_messages):
+        """zh and en locale files must have the same set of keys."""
+        assert set(zh_messages.keys()) == set(en_messages.keys())
+
+    def test_new_tui_keys_exist(self, zh_messages, en_messages):
+        """New TUI and /ppt related keys must exist in both locales."""
+        new_keys = [
+            "conv.thinking_idle",
+            "conv.ppt_skill_missing",
+            "conv.ppt_directive",
+            "conv.ppt_usage",
+            "conv.ppt_empty_requirement",
+            "conv.ppt_done",
+            "tui.title",
+            "tui.title_complete",
+            "tui.input_placeholder",
+            "tui.shortcuts",
+            "tui.user_label",
+            "tui.assistant_label",
+        ]
+        for key in new_keys:
+            assert key in zh_messages, f"Missing key in zh.json: {key}"
+            assert key in en_messages, f"Missing key in en.json: {key}"

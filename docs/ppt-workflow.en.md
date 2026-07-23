@@ -32,7 +32,7 @@ output/ppt/presentation.html
         │
         ▼
    [Review Gate]
-   confirm
+   /confirm
 ```
 
 ## Prerequisites
@@ -112,7 +112,7 @@ S6 is driven by the LLM in conversation following `S6_SYSTEM_PROMPT_FRAGMENT`. T
 ### Step 7: Return awaiting_review
 
 - Print the preview URL `http://127.0.0.1:5200/` (`s6.preview_url`)
-- Prompt the user to open it in a browser, edit and confirm, then return to the CLI and type `confirm`
+- Prompt the user to open it in a browser, edit and confirm, then return to the CLI and type `/confirm`
 - Return `StageOutput(success=True, next_action="confirm")`; the orchestrator enters the review gate
 
 ## SKILL.md and goal.json

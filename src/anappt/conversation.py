@@ -34,7 +34,12 @@ from anappt.llm.provider import AnaPPTLLM
 from anappt.stage_base import StageBase
 from anappt.stages import build_stage_registry
 from anappt.tools.agent_loop import ToolDef
-from anappt.types import InteractiveUIProtocol, PipelineContext, model_role_for_stage
+from anappt.types import (
+    InteractiveUIProtocol,
+    PipelineContext,
+    StreamingSink,
+    model_role_for_stage,
+)
 
 # --- Module-level Chinese system-prompt constants ---------------------------
 # Per the spec, LLM system-prompt text may be hard-coded Chinese; only
@@ -83,6 +88,15 @@ class ConversationRunner:
     is_ready) plus pipeline progress + project memory, and may invoke a
     subset of registered tools per turn.
 
+    When ``stream_sink`` is provided, the runner drives the LLM via the
+    streaming methods (``chat_stream`` / ``chat_with_tools_stream``) and
+    pushes live reasoning/content deltas to the sink's thinking bar,
+    then renders the final user/assistant messages through the sink
+    (replacing ``ui.print`` for chat messages). When ``stream_sink`` is
+    ``None`` (e.g. headless unit tests), the runner falls back to the
+    non-streaming ``chat`` / ``chat_with_tools`` path and prints final
+    text via ``ui.print`` — preserving the pre-streaming behavior.
+
     Attributes:
         ctx: Pipeline context (project_dir/config/llm/state/ui/session/
             git/output_dir/skill_manager/memory).
@@ -91,6 +105,9 @@ class ConversationRunner:
         ui: Interactive UI protocol implementation.
         max_iterations: Max tool-calling iterations within a single LLM
             turn before falling back to a plain chat call.
+        stream_sink: Optional StreamingSink for live streaming output.
+            When set, the runner uses streaming LLM calls and routes
+            chat messages + thinking updates through the sink.
         messages: Cross-turn persistent conversation history (only
             user/assistant text turns; tool exchanges are scoped to
             ``_llm_call`` and not retained across user turns).
@@ -102,6 +119,7 @@ class ConversationRunner:
         mode: str,
         ui: InteractiveUIProtocol,
         max_iterations: int = 12,
+        stream_sink: StreamingSink | None = None,
     ) -> None:
         """Initialize the conversation runner.
 
@@ -110,6 +128,10 @@ class ConversationRunner:
             mode: Either ``"run"`` or ``"interactive"``.
             ui: UI implementation satisfying InteractiveUIProtocol.
             max_iterations: Max tool-calling rounds per LLM turn.
+            stream_sink: Optional StreamingSink for live streaming
+                output. When provided, the runner uses streaming LLM
+                calls and routes chat messages + thinking updates
+                through the sink instead of ``ui.print``.
         """
         if mode not in ("run", "interactive"):
             raise ValueError(f"Invalid mode: {mode!r}. Must be 'run' or 'interactive'.")
@@ -117,6 +139,7 @@ class ConversationRunner:
         self.mode: str = mode
         self.ui: InteractiveUIProtocol = ui
         self.max_iterations: int = max_iterations
+        self.stream_sink: StreamingSink | None = stream_sink
         self.messages: list[dict[str, str]] = []
         self._exit: bool = False
         # Lazily-built stage registry (id → StageBase instance).
@@ -135,7 +158,11 @@ class ConversationRunner:
         Enters the current stage (pending→in_progress + new session),
         produces the LLM opening, then reads user input in a loop:
         meta-commands are dispatched locally; free text enters the LLM
-        turn. On exit, finalizes the session summary + memory + git.
+        turn. When a ``stream_sink`` is set, every accepted user input
+        (including meta-commands) is echoed back through
+        ``sink.user_message`` so it appears in the chat area before
+        being dispatched. On exit, finalizes the session summary +
+        memory + git.
         """
         self._enter_stage()
         self._opening()
@@ -146,6 +173,8 @@ class ConversationRunner:
             text = raw.strip()
             if not text:
                 continue
+            if self.stream_sink is not None:
+                self.stream_sink.user_message(text)
             if self._handle_meta(text):
                 continue
             self._turn(text)
@@ -293,8 +322,11 @@ class ConversationRunner:
     def _opening(self) -> None:
         """Have the LLM produce the opening message for the current stage.
 
-        Appends an instruction user-message, calls the LLM, prints and
-        logs the response, then records the assistant turn.
+        Appends an instruction user-message, calls the LLM, renders the
+        response through the sink (when present) or ``ui.print``
+        otherwise, logs it, then records the assistant turn. The
+        instruction message is internally injected and is NOT echoed
+        through ``sink.user_message``.
         """
         instr_key = (
             "conv.opening_instruction_interactive"
@@ -303,13 +335,22 @@ class ConversationRunner:
         )
         self.messages.append({"role": "user", "content": t(instr_key)})
         text = self._llm_call()
-        self.ui.print(text)
+        if self.stream_sink is not None:
+            self.stream_sink.assistant_message(text)
+        else:
+            self.ui.print(text)
         if self.ctx.session is not None:
             self.ctx.session.log_agent(text)
         self.messages.append({"role": "assistant", "content": text})
 
     def _turn(self, user_text: str) -> None:
         """Process one free-text user turn through the LLM.
+
+        The user input is NOT echoed here — the run loop already echoed
+        it via ``sink.user_message`` when a sink is present. This method
+        only logs the user message, appends it to ``self.messages``,
+        calls the LLM, renders the response (sink or ``ui.print``), and
+        records the assistant turn.
 
         Args:
             user_text: The user's free-text input (already stripped).
@@ -318,7 +359,10 @@ class ConversationRunner:
             self.ctx.session.log_user(user_text)
         self.messages.append({"role": "user", "content": user_text})
         text = self._llm_call()
-        self.ui.print(text)
+        if self.stream_sink is not None:
+            self.stream_sink.assistant_message(text)
+        else:
+            self.ui.print(text)
         if self.ctx.session is not None:
             self.ctx.session.log_agent(text)
         self.messages.append({"role": "assistant", "content": text})
@@ -326,15 +370,14 @@ class ConversationRunner:
     def _llm_call(self) -> str:
         """Invoke the LLM for the current turn with tool-calling support.
 
-        Builds the system prompt + running messages, then iterates:
-        if the LLM returns tool_calls, execute them and feed results
-        back; otherwise return the content. Falls back to a plain
-        ``chat`` call when max_iterations is exhausted.
+        Builds the system prompt + running messages, then delegates to
+        :meth:`_run_turn`. The actual LLM call routing (streaming vs
+        non-streaming) is decided inside ``_run_turn`` based on whether
+        a ``stream_sink`` was injected.
 
         Returns:
             The final text response from the LLM.
         """
-        role: ModelRole = model_role_for_stage(self.ctx.state.state.current_stage)
         sys_prompt = self._build_system_prompt()
         tool_schemas = self._tool_schemas()
         # Build a per-turn working message list: system + persisted
@@ -344,7 +387,56 @@ class ConversationRunner:
         messages: list[dict[str, Any]] = [
             {"role": "system", "content": sys_prompt}
         ] + list(self.messages)
+        return self._run_turn(messages, tool_schemas)
 
+    def _run_turn(
+        self,
+        messages: list[dict[str, Any]],
+        tool_schemas: list[dict[str, Any]],
+    ) -> str:
+        """Run one LLM turn, dispatching to streaming or non-streaming.
+
+        When ``self.stream_sink`` is set, the streaming path is taken
+        (``chat_stream`` / ``chat_with_tools_stream``) with live
+        thinking-bar updates pushed to the sink. Otherwise the
+        non-streaming path (``chat`` / ``chat_with_tools``) is taken,
+        preserving the pre-streaming behavior expected by headless
+        tests.
+
+        Args:
+            messages: Working message list (system + history). Tool
+                exchanges are appended to this list in place during
+                tool-calling iterations.
+            tool_schemas: OpenAI function-calling schemas for the
+                active tools (empty list when no tools are enabled).
+
+        Returns:
+            The final text response from the LLM.
+        """
+        if self.stream_sink is not None:
+            return self._stream_live(messages, tool_schemas)
+        return self._nonstream(messages, tool_schemas)
+
+    def _nonstream(
+        self,
+        messages: list[dict[str, Any]],
+        tool_schemas: list[dict[str, Any]],
+    ) -> str:
+        """Non-streaming LLM turn with tool-calling support.
+
+        Used when ``stream_sink`` is ``None`` (e.g. headless tests).
+        Iterates: if the LLM returns tool_calls, execute them and feed
+        results back; otherwise return the content. Falls back to a
+        plain ``chat`` call when max_iterations is exhausted.
+
+        Args:
+            messages: Working message list (system + history).
+            tool_schemas: Tool schemas (empty list when no tools).
+
+        Returns:
+            The final text response from the LLM.
+        """
+        role: ModelRole = model_role_for_stage(self.ctx.state.state.current_stage)
         if not tool_schemas:
             return self.ctx.llm.chat(role, messages)
 
@@ -381,44 +473,231 @@ class ConversationRunner:
         # Max iterations exhausted — fall back to a plain chat call.
         return self.ctx.llm.chat(role, messages)
 
+    def _stream_live(
+        self,
+        messages: list[dict[str, Any]],
+        tool_schemas: list[dict[str, Any]],
+    ) -> str:
+        """Streaming LLM turn with tool-calling support + sink updates.
+
+        Used when ``stream_sink`` is set. Drives the LLM via
+        ``chat_stream`` (no tools) or ``chat_with_tools_stream`` (with
+        tools). Reasoning deltas are buffered in ``reasoning_buf``,
+        content deltas in ``content_buf``; each delta triggers a
+        ``sink.thinking_update`` call (reasoning preferred, content as
+        fallback). Tool-call fragments are accumulated by index. After
+        the stream ends, if no tool_calls were emitted, the accumulated
+        content is returned; otherwise the tools are executed, their
+        results are appended as ``tool`` messages, and the next
+        streaming iteration begins. ``thinking_idle`` is emitted at the
+        start of each iteration and ``thinking_clear`` at the end. When
+        max_iterations is exhausted, falls back to a non-streaming
+        ``chat`` call.
+
+        Args:
+            messages: Working message list (system + history).
+            tool_schemas: Tool schemas (empty list when no tools).
+
+        Returns:
+            The final text response from the LLM.
+        """
+        role: ModelRole = model_role_for_stage(self.ctx.state.state.current_stage)
+        sink = self.stream_sink
+        assert sink is not None  # narrowed by caller (_run_turn)
+
+        if not tool_schemas:
+            # No tools: chat_stream yields plain string deltas.
+            sink.thinking_idle(t("conv.thinking_idle"))
+            buf: list[str] = []
+            for delta in self.ctx.llm.chat_stream(role, messages):
+                buf.append(delta)
+                sink.thinking_update("".join(buf))
+            sink.thinking_clear()
+            return "".join(buf)
+
+        for _ in range(self.max_iterations):
+            sink.thinking_idle(t("conv.thinking_idle"))
+            reasoning_buf: list[str] = []
+            content_buf: list[str] = []
+            tool_acc: dict[int, dict[str, Any]] = {}
+            for event in self.ctx.llm.chat_with_tools_stream(
+                role, messages, tool_schemas
+            ):
+                et = event["type"]
+                if et == "reasoning":
+                    reasoning_buf.append(event["delta"])
+                    sink.thinking_update(
+                        "".join(reasoning_buf) or "".join(content_buf)
+                    )
+                elif et == "content":
+                    content_buf.append(event["delta"])
+                    sink.thinking_update(
+                        "".join(reasoning_buf) or "".join(content_buf)
+                    )
+                elif et == "tool_call":
+                    tc = event["tool_call"]
+                    idx = tc["index"]
+                    slot = tool_acc.setdefault(
+                        idx, {"id": None, "name": "", "arguments": ""}
+                    )
+                    if tc.get("id"):
+                        slot["id"] = tc["id"]
+                    if tc.get("name"):
+                        slot["name"] += tc["name"]
+                    if tc.get("arguments"):
+                        slot["arguments"] += tc["arguments"]
+            sink.thinking_clear()
+            content = "".join(content_buf)
+            if not tool_acc:
+                return content
+            calls = [tool_acc[k] for k in sorted(tool_acc)]
+            # Generate fallback ids for tool_calls that arrived without one.
+            for i, c in enumerate(calls):
+                if not c["id"]:
+                    c["id"] = f"call_{i}"
+            messages.append({
+                "role": "assistant",
+                "content": content,
+                "tool_calls": [
+                    {
+                        "id": c["id"],
+                        "type": "function",
+                        "function": {
+                            "name": c["name"],
+                            "arguments": c["arguments"],
+                        },
+                    }
+                    for c in calls
+                ],
+            })
+            for c in calls:
+                result = self._execute_tool(c["name"], c["arguments"])
+                messages.append({
+                    "role": "tool",
+                    "content": result,
+                    "tool_call_id": c["id"],
+                    "name": c["name"],
+                })
+        # Max iterations exhausted — fall back to a non-streaming chat call.
+        return self.ctx.llm.chat(role, messages)
+
     # ------------------------------------------------------------------
     # Meta-command dispatch
     # ------------------------------------------------------------------
 
     def _handle_meta(self, text: str) -> bool:
-        """Dispatch a meta-command. Returns True if ``text`` was handled.
+        """Dispatch a ``/``-prefixed meta-command.
 
-        Recognized commands (case-insensitive):
-            exit / quit / 退出 — set the exit flag.
-            confirm            — advance the current stage if is_ready.
-            status             — print the pipeline status table.
-            memory             — print the project memory.
-            help / 帮助        — print the help text.
+        Recognized commands (case-insensitive after stripping the
+        leading ``/``):
+            /exit    — set the exit flag.
+            /confirm — advance the current stage if is_ready.
+            /status  — print the pipeline status table.
+            /memory  — print the project memory.
+            /help    — print the help text.
+            /ppt <requirement> — direct PPT generation (see
+                :meth:`_ppt_direct`).
+
+        Bare words (``confirm``, ``exit``, ``help``, ``退出``, ``帮助``,
+        ``quit``) and unknown ``/``-prefixed tokens (``/foo``) are NOT
+        recognized — they return ``False`` so the text flows into the
+        LLM as a free-text user turn.
 
         Args:
             text: The user's input (already stripped).
 
         Returns:
-            True if ``text`` was a meta-command, False otherwise.
+            True if ``text`` was a recognized meta-command, False
+            otherwise (caller should treat the text as free user input).
         """
-        low = text.lower()
-        if low in ("exit", "quit", "退出"):
+        if not text.startswith("/"):
+            return False
+        cmd = text.split(None, 1)[0].lower()
+        name = cmd[1:]  # strip leading "/"
+
+        if name == "exit":
             self._exit = True
             return True
-        if low == "confirm":
+        if name == "confirm":
             self._confirm()
             return True
-        if low == "status":
+        if name == "status":
             self._show_status()
             return True
-        if low == "memory":
+        if name == "memory":
             mem = self.ctx.memory.read() if self.ctx.memory else ""
             self.ui.print(mem or t("conv.memory_empty"))
             return True
-        if low in ("help", "帮助"):
+        if name == "help":
             self._show_help()
             return True
+        if name == "ppt":
+            # Parse the requirement from the original text (after "/ppt").
+            req = text[len("/ppt"):].strip()
+            if not req:
+                self.ui.print(t("conv.ppt_empty_requirement"))
+                return True
+            self._ppt_direct(req)
+            return True
         return False
+
+    def _ppt_direct(self, requirement: str) -> None:
+        """Run a direct PPT-generation turn (``/ppt <requirement>``).
+
+        Skips the S1-S5 prep stages: loads the dashi-ppt ``SKILL.md``
+        as the LLM system prompt, temporarily swaps the active tool
+        registry to the S6 subset (``read_file`` / ``write_artifact`` /
+        ``render_deck`` / ``export_pptx`` / ``read_memory`` /
+        ``update_memory`` / ``read_history``), then runs a single
+        ``_run_turn`` with the user requirement as the user message.
+        The LLM is expected to construct ``output/ppt/goal.json`` and
+        call ``render_deck`` to render ``output/ppt/presentation.html``.
+
+        This command SHALL NOT change ``state.yaml``'s stage state or
+        ``self.messages`` (it is an independent side-generation). The
+        requirement + LLM reply ARE logged to the current session log.
+        On completion, a ``conv.ppt_done`` notice is printed (the user
+        reviews the result in the browser).
+
+        Args:
+            requirement: The free-text PPT generation requirement
+                (already stripped, non-empty).
+        """
+        skill_root = self._get_skill_root()
+        if skill_root is None:
+            self.ui.print(t("conv.ppt_skill_missing"))
+            return
+        from anappt.bridge.dashi_ppt import DashiPPTBridge
+
+        try:
+            skill_md = DashiPPTBridge.load_skill_md(skill_root)
+        except Exception as e:
+            self.ui.print(str(e))
+            return
+
+        # Temporarily enable the S6 tool subset for this turn.
+        s6_stage = self._stage_registry.get("S6")
+        saved_tools = self._tools
+        self._tools = self._build_tools(s6_stage) if s6_stage else {}
+        try:
+            sys_prompt = skill_md + "\n\n" + t("conv.ppt_directive")
+            messages: list[dict[str, Any]] = [
+                {"role": "system", "content": sys_prompt},
+                {"role": "user", "content": requirement},
+            ]
+            if self.ctx.session is not None:
+                self.ctx.session.log_user(requirement)
+            tool_schemas = self._tool_schemas()
+            text = self._run_turn(messages, tool_schemas)
+            if self.stream_sink is not None:
+                self.stream_sink.assistant_message(text)
+            else:
+                self.ui.print(text)
+            if self.ctx.session is not None:
+                self.ctx.session.log_agent(text)
+            self.ui.print(t("conv.ppt_done"))
+        finally:
+            self._tools = saved_tools
 
     def _confirm(self) -> None:
         """Handle the ``confirm`` meta-command.
@@ -956,8 +1235,8 @@ class ConversationRunner:
                 )
             try:
                 DashiPPTBridge.render_deck(
-                    goal_json_path=Path(goal_json_path),
-                    output_html_path=Path(output_html_path),
+                    goal_json_path=project_dir / goal_json_path,
+                    output_html_path=project_dir / output_html_path,
                     skill_root=skill_root,
                 )
                 return f"OK: rendered {output_html_path}"
@@ -977,9 +1256,9 @@ class ConversationRunner:
                 )
             try:
                 DashiPPTBridge.export(
-                    deck_dir=Path(deck_dir),
+                    deck_dir=project_dir / deck_dir,
                     format=format,
-                    output_file=Path(output_file),
+                    output_file=project_dir / output_file,
                     skill_root=skill_root,
                 )
                 return f"OK: exported {output_file} ({format})"

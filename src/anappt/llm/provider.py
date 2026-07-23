@@ -6,6 +6,7 @@ configuration management.
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -155,6 +156,105 @@ class AnaPPTLLM:
                 )
 
         return result
+
+    def chat_stream(
+        self, role: ModelRole, messages: list[dict[str, str]], **kwargs: Any
+    ) -> Iterator[str]:
+        """Stream a chat completion, yielding incremental text fragments.
+
+        Uses ``litellm.completion(stream=True)`` and iterates over chunks.
+        For each chunk, the ``delta.reasoning_content`` (if present and not
+        None) is yielded first, followed by ``delta.content`` (if present and
+        not None). A single chunk may therefore yield zero, one, or two
+        fragments.
+
+        Args:
+            role: Model role to use.
+            messages: List of message dicts (role/content format).
+            **kwargs: Additional parameters for litellm.
+
+        Yields:
+            Incremental string fragments from the model response.
+
+        Raises:
+            ValueError: If the role is invalid.
+            Exception: If the litellm call fails.
+        """
+        role_config = self._model_for_role(role)
+        params = self._build_litellm_params(role_config, stream=True, **kwargs)
+        stream = litellm.completion(messages=messages, **params)
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            reasoning = getattr(delta, "reasoning_content", None)
+            if reasoning is not None:
+                yield reasoning
+            content = getattr(delta, "content", None)
+            if content is not None:
+                yield content
+
+    def chat_with_tools_stream(
+        self,
+        role: ModelRole,
+        messages: list[dict[str, str]],
+        tools: list[dict[str, Any]],
+        **kwargs: Any,
+    ) -> Iterator[dict[str, Any]]:
+        """Stream a chat completion with tools, yielding event dicts.
+
+        Uses ``litellm.completion(stream=True, tools=tools)`` and yields
+        typed event dictionaries for each chunk:
+
+        - ``{"type": "reasoning", "delta": <str>}`` — from
+          ``delta.reasoning_content`` (if present and not None).
+        - ``{"type": "content", "delta": <str>}`` — from ``delta.content``
+          (if present and not None).
+        - ``{"type": "tool_call", "tool_call": {"index": <int>,
+          "id": <str|None>, "name": <str|None>, "arguments": <str|None>}}``
+          — from each entry in ``delta.tool_calls`` (if present and non-empty).
+
+        Tool call fragments (``name``/``arguments``) are yielded as-is per
+        chunk; accumulation by ``index`` is the caller's responsibility.
+
+        Args:
+            role: Model role to use.
+            messages: List of message dicts.
+            tools: List of tool schemas in litellm/OpenAI function calling
+                format.
+            **kwargs: Additional parameters for litellm.
+
+        Yields:
+            Event dicts describing incremental content, reasoning, or tool
+            calls.
+
+        Raises:
+            ValueError: If the role is invalid.
+            Exception: If the litellm call fails.
+        """
+        role_config = self._model_for_role(role)
+        params = self._build_litellm_params(
+            role_config, stream=True, tools=tools, **kwargs
+        )
+        stream = litellm.completion(messages=messages, **params)
+        for chunk in stream:
+            delta = chunk.choices[0].delta
+            reasoning = getattr(delta, "reasoning_content", None)
+            if reasoning is not None:
+                yield {"type": "reasoning", "delta": reasoning}
+            content = getattr(delta, "content", None)
+            if content is not None:
+                yield {"type": "content", "delta": content}
+            tool_calls = getattr(delta, "tool_calls", None)
+            if tool_calls:
+                for tc in tool_calls:
+                    yield {
+                        "type": "tool_call",
+                        "tool_call": {
+                            "index": tc.index,
+                            "id": tc.id,
+                            "name": tc.function.name,
+                            "arguments": tc.function.arguments,
+                        },
+                    }
 
 
 def _map_thinking_to_params(provider: str, thinking: str | int | bool | None) -> dict[str, Any]:

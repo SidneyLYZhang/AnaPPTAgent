@@ -18,6 +18,14 @@ Covers:
      listing sections.
   8. read_history tool — given a session_history file, the LLM-invoked
      tool returns its content.
+  9. ``/``-prefixed meta-commands (Task 5): ``/confirm`` / ``/exit``
+     / ``/status`` (case-insensitive), bare words and unknown ``/foo``
+     fall through to the LLM as free text.
+ 10. StreamingSink integration (Task 4): with a sink injected, the
+     runner uses ``chat_stream`` / ``chat_with_tools_stream`` and
+     pushes ``thinking_update`` / ``assistant_message`` calls.
+ 11. ``/ppt <requirement>`` direct generation (Task 6): skill missing,
+     skill present (mocked), empty requirement.
 
 The tests use a FakeUI that returns canned input from a queue, plus
 MagicMock LLMs with configurable chat / chat_with_tools return values.
@@ -31,8 +39,9 @@ and as a fallback when no tools are enabled.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -87,7 +96,7 @@ class FakeUI:
     """In-memory UI mock satisfying InteractiveUIProtocol.
 
     ``input`` returns successive strings from ``inputs``; once the
-    queue is empty it returns ``"exit"`` to avoid infinite loops.
+    queue is empty it returns ``"/exit"`` to avoid infinite loops.
 
     Attributes:
         inputs: Queue of user input strings.
@@ -111,7 +120,7 @@ class FakeUI:
         if self.inputs:
             return self.inputs.pop(0)
         # Safety net: never hang the test loop.
-        return "exit"
+        return "/exit"
 
     def confirm(self, prompt: str) -> bool:
         self.confirms.append(prompt)
@@ -490,7 +499,7 @@ class TestConfirmAdvance:
             ],
         )
         git = MagicMock()
-        ui = FakeUI(inputs=["confirm"])  # after S1 opening, user confirms
+        ui = FakeUI(inputs=["/confirm"])  # after S1 opening, user confirms
         ctx = _build_ctx(project_dir, state, session, memory, llm, ui, git=git)
 
         runner = ConversationRunner(ctx, mode="run", ui=ui)
@@ -522,7 +531,7 @@ class TestConfirmAdvance:
                 {"content": "S2 opening after advance.", "tool_calls": []},
             ],
         )
-        ui = FakeUI(inputs=["confirm"])
+        ui = FakeUI(inputs=["/confirm"])
         ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
 
         runner = ConversationRunner(ctx, mode="run", ui=ui)
@@ -559,7 +568,7 @@ class TestConfirmNotReady:
             chat_return="finalize",
             chat_with_tools_responses=[{"content": "S1 opening.", "tool_calls": []}],
         )
-        ui = FakeUI(inputs=["confirm"])  # rejected; then exit
+        ui = FakeUI(inputs=["/confirm"])  # rejected; then exit
         ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
 
         runner = ConversationRunner(ctx, mode="run", ui=ui)
@@ -819,7 +828,7 @@ class TestMetaCommands:
             chat_return="finalize",
             chat_with_tools_responses=[{"content": "Opening.", "tool_calls": []}],
         )
-        ui = FakeUI(inputs=["status"])  # then exit
+        ui = FakeUI(inputs=["/status"])  # then exit
         ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
 
         runner = ConversationRunner(ctx, mode="run", ui=ui)
@@ -846,7 +855,7 @@ class TestMetaCommands:
             chat_return="finalize",
             chat_with_tools_responses=[{"content": "Opening.", "tool_calls": []}],
         )
-        ui = FakeUI(inputs=["memory"])  # then exit
+        ui = FakeUI(inputs=["/memory"])  # then exit
         ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
 
         runner = ConversationRunner(ctx, mode="run", ui=ui)
@@ -866,7 +875,7 @@ class TestMetaCommands:
             chat_return="finalize",
             chat_with_tools_responses=[{"content": "Opening.", "tool_calls": []}],
         )
-        ui = FakeUI(inputs=["help"])
+        ui = FakeUI(inputs=["/help"])
         ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
 
         runner = ConversationRunner(ctx, mode="run", ui=ui)
@@ -1088,3 +1097,819 @@ class TestFinalizeOrdering:
         )
         assert len(session_files) >= 1
         assert any(f.name.endswith("_S1.md") for f in session_files)
+
+
+# ---------------------------------------------------------------------------
+# 11. ``/``-prefixed meta-commands (Task 5 / SubTask 5.4)
+# ---------------------------------------------------------------------------
+
+
+class TestSlashMetaCommands:
+    """``/``-prefixed meta-commands and free-text fall-through.
+
+    Verifies that:
+      - ``/confirm``, ``/exit``, ``/Status`` (case-insensitive) trigger
+        the corresponding logic.
+      - ``/foo``, bare ``confirm``, bare ``退出``, bare ``help`` are NOT
+        recognized as meta-commands — they fall through to the LLM as
+        free text (``_handle_meta`` returns ``False``).
+    """
+
+    def test_slash_confirm_triggers_confirm(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        # S1 is_ready is False (no artifacts) → confirm prints not_ready.
+        llm = _make_llm(
+            chat_return="finalize",
+            chat_with_tools_responses=[{"content": "Opening.", "tool_calls": []}],
+        )
+        ui = FakeUI(inputs=["/confirm"])
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+        runner.run()
+
+        # confirm was dispatched: not_ready printed; S1 still in_progress.
+        assert any("尚未就绪" in m for m in ui.prints)
+        assert state.get_stage("S1").status.value == "in_progress"
+        # No second LLM turn happened (only the opening).
+        assert llm.chat_with_tools.call_count == 1
+
+    def test_slash_confirm_direct_handle_meta_returns_true(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        """``_handle_meta("/confirm")`` returns True without LLM call."""
+        llm = _make_llm()
+        ui = FakeUI()
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+
+        assert runner._handle_meta("/confirm") is True
+        # LLM was NOT called by _handle_meta.
+        assert llm.chat_with_tools.call_count == 0
+        assert llm.chat.call_count == 0
+
+    def test_slash_exit_sets_exit_flag(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        llm = _make_llm(
+            chat_with_tools_responses=[{"content": "Opening.", "tool_calls": []}],
+        )
+        ui = FakeUI(inputs=["/exit"])
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+        runner.run()
+
+        assert runner._exit is True
+        # Only the opening LLM call happened; /exit did not call LLM.
+        assert llm.chat_with_tools.call_count == 1
+
+    def test_slash_status_case_insensitive(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        llm = _make_llm(
+            chat_with_tools_responses=[{"content": "Opening.", "tool_calls": []}],
+        )
+        ui = FakeUI(inputs=["/Status"])  # case-insensitive
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+        runner.run()
+
+        # /Status triggered _show_status → table rendered with 6 stages.
+        assert len(ui.tables) == 1
+        _headers, rows = ui.tables[0]
+        assert len(rows) == 6
+
+    def test_slash_memory_case_insensitive(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        # Pre-write memory content.
+        (project_dir / ".anappt" / "memory.md").write_text(
+            "# Memory\n- audience confirmed", encoding="utf-8"
+        )
+        llm = _make_llm(
+            chat_with_tools_responses=[{"content": "Opening.", "tool_calls": []}],
+        )
+        ui = FakeUI(inputs=["/MEMORY"])
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+        runner.run()
+
+        assert any("audience confirmed" in m for m in ui.prints)
+
+    def test_slash_help_dispatches(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        llm = _make_llm(
+            chat_with_tools_responses=[{"content": "Opening.", "tool_calls": []}],
+        )
+        ui = FakeUI(inputs=["/help"])
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+        runner.run()
+
+        # Help text printed (mentions /confirm).
+        assert any("/confirm" in m for m in ui.prints)
+
+    def test_slash_unknown_returns_false(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        """/foo is not a recognized meta-command → returns False."""
+        llm = _make_llm()
+        ui = FakeUI()
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+
+        assert runner._handle_meta("/foo") is False
+        assert runner._handle_meta("/foo bar baz") is False
+
+    def test_slash_unknown_falls_through_to_llm(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        """/foo bar is treated as free text → sent to the LLM."""
+        llm = _make_llm(
+            chat_return="finalize",
+            chat_with_tools_responses=[
+                {"content": "Opening.", "tool_calls": []},
+                {"content": "Reply to /foo bar.", "tool_calls": []},
+            ],
+        )
+        ui = FakeUI(inputs=["/foo bar"])
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+        runner.run()
+
+        # The second chat_with_tools call carried "/foo bar" as the
+        # latest user message.
+        second_call_args = llm.chat_with_tools.call_args_list[1]
+        _role, messages, _tools = second_call_args.args
+        user_msgs = [m for m in messages if m.get("role") == "user"]
+        assert user_msgs
+        assert user_msgs[-1]["content"] == "/foo bar"
+        # Reply printed.
+        assert any("Reply to /foo bar." in m for m in ui.prints)
+
+    def test_bare_confirm_returns_false(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        """Bare 'confirm' (no /) is free text, not a meta-command."""
+        llm = _make_llm()
+        ui = FakeUI()
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+
+        assert runner._handle_meta("confirm") is False
+
+    def test_bare_chinese_aliases_return_false(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        """Bare Chinese aliases ('退出', '帮助') and 'quit' are free text."""
+        llm = _make_llm()
+        ui = FakeUI()
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+
+        for text in ("退出", "帮助", "quit", "exit", "status", "memory", "help"):
+            assert runner._handle_meta(text) is False, (
+                f"{text!r} should NOT be a meta-command"
+            )
+
+    def test_bare_confirm_falls_through_to_llm(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        """Bare 'confirm' is sent to the LLM as free text."""
+        llm = _make_llm(
+            chat_return="finalize",
+            chat_with_tools_responses=[
+                {"content": "Opening.", "tool_calls": []},
+                {"content": "I see you typed confirm.", "tool_calls": []},
+            ],
+        )
+        ui = FakeUI(inputs=["confirm"])
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+        runner.run()
+
+        # The second chat_with_tools call carried "confirm" as the
+        # latest user message (not treated as a meta-command).
+        second_call_args = llm.chat_with_tools.call_args_list[1]
+        _role, messages, _tools = second_call_args.args
+        user_msgs = [m for m in messages if m.get("role") == "user"]
+        assert user_msgs[-1]["content"] == "confirm"
+        # Reply printed.
+        assert any("I see you typed confirm." in m for m in ui.prints)
+
+
+# ---------------------------------------------------------------------------
+# 12. StreamingSink integration (Task 4 / SubTask 4.5)
+# ---------------------------------------------------------------------------
+
+
+class FakeSink:
+    """Recording StreamingSink for unit tests.
+
+    Records every call so tests can assert on the exact sequence of
+    ``user_message`` / ``assistant_message`` / ``thinking_update`` /
+    ``thinking_idle`` / ``thinking_clear`` invocations.
+    """
+
+    def __init__(self) -> None:
+        self.user_messages: list[str] = []
+        self.assistant_messages: list[str] = []
+        self.thinking_updates: list[str] = []
+        self.thinking_idles: list[str] = []
+        self.thinking_clears: int = 0
+
+    def user_message(self, text: str) -> None:
+        self.user_messages.append(text)
+
+    def assistant_message(self, text: str) -> None:
+        self.assistant_messages.append(text)
+
+    def thinking_update(self, buf: str) -> None:
+        self.thinking_updates.append(buf)
+
+    def thinking_idle(self, msg: str) -> None:
+        self.thinking_idles.append(msg)
+
+    def thinking_clear(self) -> None:
+        self.thinking_clears += 1
+
+
+class TestStreamingSinkIntegration:
+    """Verify the streaming path drives the sink correctly.
+
+    When ``stream_sink`` is injected, the runner uses
+    ``chat_with_tools_stream`` (or ``chat_stream`` without tools) and
+    pushes ``thinking_idle`` → ``thinking_update`` (per delta) →
+    ``thinking_clear`` → ``assistant_message`` to the sink. The plain
+    ``chat`` / ``chat_with_tools`` non-streaming methods are NOT
+    called.
+    """
+
+    def test_stream_no_tools_chat_stream_used(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        """With sink + no tools: chat_stream is used; sink receives
+        thinking updates + final assistant_message."""
+        # Build an LLM mock whose chat_stream yields content deltas.
+        llm = MagicMock()
+        llm.chat_stream.return_value = iter(["Hel", "lo", " world"])
+        # _finalize calls chat (best-effort) — give it a harmless return.
+        llm.chat.return_value = "NO_UPDATE"
+
+        ui = FakeUI(inputs=[])  # immediate exit after opening
+        sink = FakeSink()
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+
+        # Force a stage with no tools: patch _tool_schemas to return [].
+        runner = ConversationRunner(ctx, mode="run", ui=ui, stream_sink=sink)
+        runner._tool_schemas = lambda: []  # type: ignore[method-assign]
+        runner.run()
+
+        # chat_stream was used (not chat_with_tools / chat for the turn).
+        llm.chat_stream.assert_called_once()
+        llm.chat_with_tools_stream.assert_not_called()
+        llm.chat_with_tools.assert_not_called()
+        # thinking_idle called once before the stream; thinking_clear once
+        # after; thinking_update called once per delta (3 deltas).
+        assert len(sink.thinking_idles) == 1
+        assert sink.thinking_clears == 1
+        assert len(sink.thinking_updates) == 3
+        # thinking_updates carry the accumulated buffer at each step.
+        assert sink.thinking_updates[0] == "Hel"
+        assert sink.thinking_updates[1] == "Hello"
+        assert sink.thinking_updates[2] == "Hello world"
+        # assistant_message received the full text.
+        assert sink.assistant_messages == ["Hello world"]
+        # No ui.print for the assistant text (sink handled it).
+        assert all("Hello world" not in m for m in ui.prints)
+
+    def test_stream_with_tools_content_only(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        """With sink + tools: chat_with_tools_stream yields content
+        events only (no tool_calls); assistant_message receives the
+        full content."""
+        llm = MagicMock()
+        # Single round: content deltas, no tool_calls.
+        llm.chat_with_tools_stream.return_value = iter([
+            {"type": "content", "delta": "Hello"},
+            {"type": "content", "delta": " world"},
+        ])
+        llm.chat.return_value = "NO_UPDATE"  # for _finalize
+
+        ui = FakeUI(inputs=[])
+        sink = FakeSink()
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui, stream_sink=sink)
+        runner.run()
+
+        # Streaming path used.
+        llm.chat_with_tools_stream.assert_called_once()
+        llm.chat_with_tools.assert_not_called()
+        llm.chat_stream.assert_not_called()
+        # One idle + one clear + 2 updates (one per content delta).
+        assert len(sink.thinking_idles) == 1
+        assert sink.thinking_clears == 1
+        assert len(sink.thinking_updates) == 2
+        assert sink.thinking_updates[0] == "Hello"
+        assert sink.thinking_updates[1] == "Hello world"
+        # Final assistant message has the full content.
+        assert sink.assistant_messages == ["Hello world"]
+
+    def test_stream_with_tools_tool_call_then_content(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        """With sink + tools: first round emits a tool_call (name +
+        arguments split across chunks); tool is executed; second round
+        emits final content. Verifies tool execution + final text."""
+        # The tool to call: write_artifact with rel_path + content.
+        wa_args_partial1 = '{"rel_path": '
+        wa_args_partial2 = '"hello.txt", "content": "hi"}'
+        # Round 1 events: tool_call (id+name) → tool_call (args1) →
+        # tool_call (args2). Round 2 events: content deltas.
+        def stream_side_effect(role, messages, tools):
+            # Inspect the latest message to decide which round we are in.
+            # Round 1: messages = [system, user_instruction]
+            # Round 2: messages = [system, user_instruction, assistant
+            #           (with tool_calls), tool (result)]
+            if any(m.get("role") == "tool" for m in messages):
+                # Round 2: yield content.
+                yield {"type": "content", "delta": "Wrote "}
+                yield {"type": "content", "delta": "the file."}
+                return
+            # Round 1: yield tool_call fragments.
+            yield {
+                "type": "tool_call",
+                "tool_call": {
+                    "index": 0,
+                    "id": "call_1",
+                    "name": "write_artifact",
+                    "arguments": None,
+                },
+            }
+            yield {
+                "type": "tool_call",
+                "tool_call": {
+                    "index": 0,
+                    "id": None,
+                    "name": None,
+                    "arguments": wa_args_partial1,
+                },
+            }
+            yield {
+                "type": "tool_call",
+                "tool_call": {
+                    "index": 0,
+                    "id": None,
+                    "name": None,
+                    "arguments": wa_args_partial2,
+                },
+            }
+
+        llm = MagicMock()
+        llm.chat_with_tools_stream.side_effect = stream_side_effect
+        llm.chat.return_value = "NO_UPDATE"
+
+        ui = FakeUI(inputs=[])
+        sink = FakeSink()
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui, stream_sink=sink)
+        runner.run()
+
+        # Two streaming rounds happened (tool_call + final content).
+        assert llm.chat_with_tools_stream.call_count == 2
+        # Two idle + two clear (one per round).
+        assert len(sink.thinking_idles) == 2
+        assert sink.thinking_clears == 2
+        # The tool was actually executed: hello.txt was written.
+        written = project_dir / "hello.txt"
+        assert written.exists()
+        assert written.read_text(encoding="utf-8") == "hi"
+        # Final assistant_message has the round-2 content.
+        assert sink.assistant_messages == ["Wrote the file."]
+        # No plain chat_with_tools / chat_stream calls for the turn.
+        llm.chat_with_tools.assert_not_called()
+        llm.chat_stream.assert_not_called()
+
+    def test_stream_user_message_echoed(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        """With sink, user input is echoed via sink.user_message before
+        the LLM turn."""
+        llm = MagicMock()
+        # Opening: 1 round content; user turn: 1 round content.
+        llm.chat_with_tools_stream.side_effect = [
+            iter([{"type": "content", "delta": "Opening."}]),
+            iter([{"type": "content", "delta": "Reply."}]),
+        ]
+        llm.chat.return_value = "NO_UPDATE"
+
+        ui = FakeUI(inputs=["hi there"])
+        sink = FakeSink()
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui, stream_sink=sink)
+        runner.run()
+
+        # The user's "hi there" was echoed via sink.user_message.
+        assert "hi there" in sink.user_messages
+        # Both opening and reply rendered via sink.assistant_message.
+        assert sink.assistant_messages == ["Opening.", "Reply."]
+
+    def test_no_sink_uses_nonstream_path(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        """Without sink, the runner uses chat_with_tools (non-stream)."""
+        llm = _make_llm(
+            chat_return="finalize",
+            chat_with_tools_responses=[{"content": "Opening.", "tool_calls": []}],
+        )
+        ui = FakeUI(inputs=[])
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)  # no sink
+        runner.run()
+
+        # Non-streaming path used.
+        llm.chat_with_tools.assert_called_once()
+        llm.chat_with_tools_stream.assert_not_called()
+        llm.chat_stream.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# 13. ``/ppt <requirement>`` direct generation (Task 6 / SubTask 6.5)
+# ---------------------------------------------------------------------------
+
+
+class TestPptDirect:
+    """Tests for the ``/ppt <requirement>`` direct-generation command.
+
+    Covers:
+      - skill missing → ``conv.ppt_skill_missing`` printed, no LLM call.
+      - skill present (mocked) → LLM is called with S6 tools; goal.json
+        written; render_deck triggered; stage state + self.messages
+        unchanged.
+      - ``/ppt`` (empty requirement) → ``conv.ppt_empty_requirement``.
+    """
+
+    def test_ppt_skill_missing_prints_notice_no_llm_call(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        """When _get_skill_root returns None, /ppt prints the
+        skill-missing notice and does NOT invoke the LLM."""
+        llm = _make_llm(
+            chat_with_tools_responses=[{"content": "Opening.", "tool_calls": []}],
+        )
+        ui = FakeUI(inputs=["/ppt 生成关于 Q3 的 PPT"])
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+        # Force _get_skill_root to return None (skill not installed).
+        runner._get_skill_root = lambda: None  # type: ignore[method-assign]
+        runner.run()
+
+        # Skill-missing notice printed (contains the key substring).
+        assert any("dashi-ppt-skill 未安装" in m for m in ui.prints)
+        # No LLM call beyond the opening (the /ppt branch returned early).
+        # Only the opening used chat_with_tools; /ppt itself did NOT
+        # invoke the LLM. (llm.chat is still called by _finalize for
+        # finalize_summary + memory.update — that's expected and not
+        # attributable to /ppt.)
+        assert llm.chat_with_tools.call_count == 1
+        # Pipeline state untouched.
+        assert state.state.current_stage == "S1"
+
+    def test_ppt_empty_requirement_prints_usage(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        """/ppt with no requirement after the command prints usage."""
+        llm = _make_llm(
+            chat_with_tools_responses=[{"content": "Opening.", "tool_calls": []}],
+        )
+        ui = FakeUI(inputs=["/ppt"])
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+        runner._get_skill_root = lambda: None  # type: ignore[method-assign]
+        runner.run()
+
+        # Empty-requirement notice printed (i18n key text).
+        assert any("请提供 PPT 生成需求" in m for m in ui.prints)
+        # /ppt did not call the LLM (only the opening used chat_with_tools;
+        # llm.chat calls come from _finalize, not /ppt).
+        assert llm.chat_with_tools.call_count == 1
+
+    def test_ppt_skill_present_runs_llm_with_s6_tools(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+        tmp_path: Path,
+    ) -> None:
+        """With skill present, /ppt loads SKILL.md, runs one LLM turn
+        with the S6 tool subset, writes goal.json, triggers
+        render_deck, and leaves state.yaml + self.messages unchanged.
+
+        chat_with_tools call order:
+          1. S1 opening (no tool_calls) — from ``_opening()``.
+          2. /ppt tool_calls round (write_artifact + render_deck).
+          3. /ppt final content round (no tool_calls).
+        Then the FakeUI fallback ``/exit`` ends the loop.
+        """
+        # Build a fake skill root with a SKILL.md.
+        skill_root = tmp_path / "dashi-ppt"
+        skill_root.mkdir()
+        (skill_root / "SKILL.md").write_text(
+            "# Dashi PPT Skill\n\nSkill instructions.", encoding="utf-8"
+        )
+
+        goal_json_content = json.dumps(
+            {
+                "title": "Test",
+                "goal": "Test goal",
+                "audience": ["x"],
+                "owner": "u",
+                "randomSeed": 1,
+                "pageCount": 5,
+                "themePack": "theme01",
+                "slides": [],
+            },
+            ensure_ascii=False,
+        )
+        wa_goal = {
+            "id": "c1",
+            "name": "write_artifact",
+            "arguments": json.dumps(
+                {"rel_path": "output/ppt/goal.json", "content": goal_json_content}
+            ),
+        }
+        rd_call = {
+            "id": "c2",
+            "name": "render_deck",
+            "arguments": json.dumps(
+                {
+                    "goal_json_path": "output/ppt/goal.json",
+                    "output_html_path": "output/ppt/presentation.html",
+                }
+            ),
+        }
+        llm = MagicMock()
+        # Order: S1 opening → /ppt tools round → /ppt final content.
+        llm.chat_with_tools.side_effect = [
+            {"content": "S1 opening.", "tool_calls": []},
+            {"content": "Constructing goal.json.", "tool_calls": [wa_goal, rd_call]},
+            {"content": "PPT rendered. Please review in browser.", "tool_calls": []},
+        ]
+        # _finalize calls chat (best-effort).
+        llm.chat.return_value = "NO_UPDATE"
+
+        ui = FakeUI(inputs=["/ppt 生成关于 Q3 的 PPT"])
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+        # Force _get_skill_root to return our fake skill root.
+        runner._get_skill_root = lambda: skill_root  # type: ignore[method-assign]
+
+        # Patch DashiPPTBridge.render_deck to avoid subprocess; write a
+        # fake presentation.html instead.
+        def fake_render_deck(goal_json_path, output_html_path, skill_root):
+            output_html_path = Path(output_html_path)
+            output_html_path.parent.mkdir(parents=True, exist_ok=True)
+            output_html_path.write_text(
+                "<!DOCTYPE html><html><body>Mock</body></html>",
+                encoding="utf-8",
+            )
+            return output_html_path
+
+        with patch(
+            "anappt.bridge.dashi_ppt.DashiPPTBridge.render_deck",
+            side_effect=fake_render_deck,
+        ):
+            runner.run()
+
+        # goal.json was written by the write_artifact tool.
+        goal_json = project_dir / "output" / "ppt" / "goal.json"
+        assert goal_json.exists()
+        parsed = json.loads(goal_json.read_text(encoding="utf-8"))
+        assert parsed["title"] == "Test"
+        # presentation.html was written by render_deck.
+        html = project_dir / "output" / "ppt" / "presentation.html"
+        assert html.exists()
+        # Final LLM reply + ppt_done notice printed.
+        assert any("PPT rendered. Please review in browser." in m for m in ui.prints)
+        assert any("浏览器" in m for m in ui.prints)  # conv.ppt_done
+
+        # Pipeline state untouched (still S1 in_progress, never advanced).
+        assert state.state.current_stage == "S1"
+        assert state.get_stage("S1").status.value == "in_progress"
+        # 3 chat_with_tools calls total: S1 opening + /ppt tools + /ppt final.
+        assert llm.chat_with_tools.call_count == 3
+        # The /ppt turn's first call (2nd overall) used S6 tools.
+        ppt_call_args = llm.chat_with_tools.call_args_list[1]
+        _role, ppt_messages, tools = ppt_call_args.args
+        tool_names = {t["function"]["name"] for t in tools}
+        assert "render_deck" in tool_names
+        assert "write_artifact" in tool_names
+        assert "export_pptx" in tool_names
+        # The /ppt turn's system prompt contains the SKILL.md content.
+        assert "Dashi PPT Skill" in ppt_messages[0]["content"]
+        # The user message is the requirement.
+        assert ppt_messages[1]["content"] == "生成关于 Q3 的 PPT"
+        # Tools were restored after /ppt (S1 opening's tool list does
+        # NOT contain render_deck).
+        s1_call_args = llm.chat_with_tools.call_args_list[0]
+        _r, _m, s1_tools = s1_call_args.args
+        s1_names = {t["function"]["name"] for t in s1_tools}
+        assert "render_deck" not in s1_names  # S1 doesn't have render_deck
+
+    def test_ppt_skill_present_state_and_messages_unchanged(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+        tmp_path: Path,
+    ) -> None:
+        """``/ppt`` does not change state.yaml stage status or
+        ``self.messages`` (the /ppt turn is independent)."""
+        # Set up fake skill root.
+        skill_root = tmp_path / "dashi-ppt"
+        skill_root.mkdir()
+        (skill_root / "SKILL.md").write_text("# Skill", encoding="utf-8")
+
+        goal_json_content = json.dumps(
+            {"title": "T", "goal": "G", "slides": []}, ensure_ascii=False
+        )
+        wa_goal = {
+            "id": "c1",
+            "name": "write_artifact",
+            "arguments": json.dumps(
+                {"rel_path": "output/ppt/goal.json", "content": goal_json_content}
+            ),
+        }
+        rd_call = {
+            "id": "c2",
+            "name": "render_deck",
+            "arguments": json.dumps(
+                {
+                    "goal_json_path": "output/ppt/goal.json",
+                    "output_html_path": "output/ppt/presentation.html",
+                }
+            ),
+        }
+        llm = MagicMock()
+        # Order: S1 opening (1 call), /ppt turn (2 calls: tools + final).
+        llm.chat_with_tools.side_effect = [
+            {"content": "S1 opening.", "tool_calls": []},
+            {"content": "Constructing.", "tool_calls": [wa_goal, rd_call]},
+            {"content": "PPT rendered.", "tool_calls": []},
+        ]
+        llm.chat.return_value = "NO_UPDATE"
+
+        ui = FakeUI(inputs=["/ppt 生成 PPT"])
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+        runner._get_skill_root = lambda: skill_root  # type: ignore[method-assign]
+
+        def fake_render_deck(goal_json_path, output_html_path, skill_root):
+            output_html_path = Path(output_html_path)
+            output_html_path.parent.mkdir(parents=True, exist_ok=True)
+            output_html_path.write_text("<html></html>", encoding="utf-8")
+            return output_html_path
+
+        with patch(
+            "anappt.bridge.dashi_ppt.DashiPPTBridge.render_deck",
+            side_effect=fake_render_deck,
+        ):
+            runner.run()
+
+        # State unchanged.
+        assert state.state.current_stage == "S1"
+        assert state.get_stage("S1").status.value == "in_progress"
+        # self.messages contains only the S1 opening pair (instruction +
+        # opening reply). The /ppt turn was NOT appended.
+        assert len(runner.messages) == 2
+        assert runner.messages[0]["role"] == "user"  # opening instruction
+        assert runner.messages[1]["content"] == "S1 opening."
+        # goal.json + presentation.html exist.
+        assert (project_dir / "output" / "ppt" / "goal.json").exists()
+        assert (project_dir / "output" / "ppt" / "presentation.html").exists()
+        # 3 chat_with_tools calls total: S1 opening + /ppt tools + /ppt final.
+        assert llm.chat_with_tools.call_count == 3
+        # The /ppt turn's first call used S6 tools (render_deck +
+        # write_artifact + read_file + export_pptx + ...).
+        ppt_call_args = llm.chat_with_tools.call_args_list[1]
+        _role, _messages, tools = ppt_call_args.args
+        tool_names = {t["function"]["name"] for t in tools}
+        assert "render_deck" in tool_names
+        assert "write_artifact" in tool_names
+        assert "export_pptx" in tool_names
+        # The /ppt turn's system prompt contains the SKILL.md content.
+        ppt_messages = _messages
+        assert "Skill" in ppt_messages[0]["content"]  # SKILL.md text
+        # The user message is the requirement.
+        assert ppt_messages[1]["content"] == "生成 PPT"
+        # Tools were restored after /ppt (S1 tools back in place for
+        # subsequent turns — verified by inspecting the S1 opening's
+        # tool list, which should NOT contain render_deck).
+        s1_call_args = llm.chat_with_tools.call_args_list[0]
+        _r, _m, s1_tools = s1_call_args.args
+        s1_names = {t["function"]["name"] for t in s1_tools}
+        assert "render_deck" not in s1_names  # S1 doesn't have render_deck
+
+    def test_ppt_load_skill_md_failure_prints_error(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+        tmp_path: Path,
+    ) -> None:
+        """If load_skill_md raises, the error is printed and /ppt
+        returns without calling the LLM."""
+        skill_root = tmp_path / "dashi-ppt"
+        skill_root.mkdir()
+        # NOTE: no SKILL.md → load_skill_md raises FileNotFoundError.
+
+        llm = _make_llm(
+            chat_with_tools_responses=[{"content": "Opening.", "tool_calls": []}],
+        )
+        ui = FakeUI(inputs=["/ppt 生成 PPT"])
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+        runner._get_skill_root = lambda: skill_root  # type: ignore[method-assign]
+        runner.run()
+
+        # Error message printed (mentions SKILL.md missing).
+        assert any("SKILL.md" in m for m in ui.prints)
+        # No LLM call beyond the S1 opening.
+        assert llm.chat_with_tools.call_count == 1

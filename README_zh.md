@@ -201,14 +201,16 @@ cd my_report
 #    支持格式：CSV、Excel、SQLite、DuckDB、Parquet
 cp ~/sales_data.csv data/
 
-# 4. 运行流水线（启动对话式 TUI）
+# 4. 运行流水线（启动 textual 全屏对话式 TUI，LLM 流式输出 + 思考滚动条）
 anappt run
 
 # 5. S1 阶段：通过对话描述选题、受众与目标，
 #    智能体生成 report.yaml 与 .anappt/s1_topic.md
 
-# 6. 每个阶段产出就绪后输入 'confirm' 推进到下一阶段；
-#    也可输入自由文本反馈，智能体会据此修订当前阶段产出
+# 6. 每个阶段产出就绪后输入 /confirm 推进到下一阶段；
+#    也可输入自由文本反馈，智能体会据此修订当前阶段产出。
+#    元命令均以 / 开头（/confirm /exit /status /memory /help），
+#    还可用 /ppt <需求> 跳过前置阶段直达生成 PPT。
 
 # 7. S5 完成后，查看报告 output/final_report.md
 # 8. S6 完成后，打开演示文稿 output/ppt/presentation.html
@@ -226,7 +228,7 @@ anappt run
 | `anappt config show`          | 显示当前完整有效配置（含 thinking、web 搜索/读取，API key 掩码，标注来源） |
 | `anappt config set`           | 交互式配置三个模型角色（含 thinking）与 web_search/web_fetch 能力 |
 | `anappt setup`                | 安装/初始化 dashi-ppt skill 等资源 |
-| `anappt interactive`          | 启动交互模式                      |
+| `anappt interactive`          | 启动交互模式（textual 全屏对话式 TUI） |
 
 ## 项目结构
 
@@ -328,7 +330,7 @@ anappt setup
 | S5   | 报告生成          | writing    | 将分析结果转化为精炼报告（output/final_report.md） |
 | S6   | PPT 生成          | writing    | 将报告转为 HTML 幻灯片（output/ppt/presentation.html） |
 
-每个阶段完成后暂停，等待用户输入 `confirm` 推进，或输入自由文本反馈由 LLM 修订产出物后再次确认。
+每个阶段完成后暂停，等待用户输入 `/confirm` 推进，或输入自由文本反馈由 LLM 修订产出物后再次确认。元命令统一以 `/` 开头（`/confirm`、`/exit`、`/status`、`/memory`、`/help`），LLM 回复以流式输出并配实时「思考滚动条」；此外可用 `/ppt <需求>` 跳过 S1–S5 前置阶段直达生成 PPT。
 
 ## 国际化
 

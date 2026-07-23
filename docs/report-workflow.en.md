@@ -2,7 +2,7 @@
 
 ### Overview
 
-The analysis report is generated through five stages (S1-S5), orchestrated by the conversation-driven TUI `ConversationRunner`. Each stage uses a different LLM model role, produces specific artifacts via conversation, and includes a human review gate (`confirm`) between stages. S6 (PPT generation) is documented in `ppt-workflow.en.md` and is out of scope for this document.
+The analysis report is generated through five stages (S1-S5), orchestrated by the conversation-driven TUI `ConversationRunner`. Each stage uses a different LLM model role, produces specific artifacts via conversation, and includes a human review gate (`/confirm`) between stages. S6 (PPT generation) is documented in `ppt-workflow.en.md` and is out of scope for this document.
 
 ### Flow Diagram
 
@@ -18,8 +18,8 @@ The analysis report is generated through five stages (S1-S5), orchestrated by th
  + s1_topic.md
      │               │               │               │               │
      ▼               ▼               ▼               ▼               ▼
- [Review Gate]  [Review Gate]  [Review Gate]   [Review Gate]   [Review Gate]
-   confirm         confirm         confirm          confirm          confirm
+ [Review Gate]   [Review Gate]   [Review Gate]    [Review Gate]    [Review Gate]
+   /confirm        /confirm        /confirm         /confirm         /confirm
 ```
 
 ### S1: Topic & Goal Definition
@@ -37,7 +37,7 @@ The analysis report is generated through five stages (S1-S5), orchestrated by th
    - Delivery format (expected PPT pages, whether PDF/HTML is needed, theme preference)
 2. Call `write_artifact("report.yaml", <YAML>)` to write `report.yaml` at the project root. The YAML structure contains `project`/`report`/`delivery` sections
 3. Call `write_artifact(".anappt/s1_topic.md", <content>)` to write the refined topic document, expanding on topic background, motivation, target audience, report objectives, success criteria, and suggested analysis approach
-4. Prompt the user to review both artifacts, then input `confirm` to proceed. Users may also provide revision feedback directly in the conversation; the LLM updates the artifacts and waits for `confirm` again
+4. Prompt the user to review both artifacts, then input `/confirm` to proceed. Users may also provide revision feedback directly in the conversation; the LLM updates the artifacts and waits for `/confirm` again
 
 **Output**:
 - `report.yaml` — project root report specification
@@ -74,7 +74,7 @@ The analysis report is generated through five stages (S1-S5), orchestrated by th
    - Estimated data volume
    - Data source
 4. Call `write_artifact(".anappt/s2_data_requirement.md", <content>)` to write the list
-5. Prompt the user to review the artifact, then input `confirm`; revisions can be proposed in the conversation
+5. Prompt the user to review the artifact, then input `/confirm`; revisions can be proposed in the conversation
 
 > **Important**: This is the key moment for users to prepare data. After reviewing S2, users should place data files (CSV, Excel, SQLite, DuckDB, Parquet) into the `data/` directory, then confirm to proceed to S3.
 
@@ -144,7 +144,7 @@ The analysis report is generated through five stages (S1-S5), orchestrated by th
    - `fetch_url`: read full text of related web pages/reports/policy documents (if `JINA_API_KEY` is not configured, fall back to `search_web` snippets)
 4. Integrate conclusions, call `write_artifact(".anappt/s4_analysis_report.md", <content>)` to write the draft using a clear Markdown structure (Executive Summary, Methodology, Key Findings, Detailed Analysis, Recommendations, etc.)
 5. Prompt the user to review the draft and provide feedback; receive feedback → deepen reasoning → update the report → submit for user confirmation again
-6. Loop until the user inputs `confirm` to proceed to S5
+6. Loop until the user inputs `/confirm` to proceed to S5
 
 **Output**: `.anappt/s4_analysis_report.md` (the conversation path does not generate `.anappt/data_info.json`)
 
@@ -179,9 +179,9 @@ The analysis report is generated through five stages (S1-S5), orchestrated by th
    - Appendix / Data Notes
 3. Call `write_artifact("output/final_report.md", <content>)` to write the report using clear Markdown formatting (headings, tables, lists, image references, etc.)
 4. After writing, **explicitly remind the user to open `output/final_report.md` to review and edit**, informing the user that they can:
-   - Open the file directly in an editor and edit it, then return to the conversation and input `confirm`
+   - Open the file directly in an editor and edit it, then return to the conversation and input `/confirm`
    - Or propose revision feedback directly in the conversation; the LLM updates the report and asks for user confirmation again
-5. Users may iterate multiple times; once satisfied, input `confirm` to proceed to S6
+5. Users may iterate multiple times; once satisfied, input `/confirm` to proceed to S6
 
 **Output**: `output/final_report.md` (the conversation path does not generate `.anappt/s5_report.md`)
 
@@ -197,28 +197,32 @@ The analysis report is generated through five stages (S1-S5), orchestrated by th
 
 > **Important**: After S5, the system prompts the user to open and review `output/final_report.md`. Users can:
 > 1. Directly edit `output/final_report.md`
-> 2. Describe revision feedback in the terminal; the LLM updates the report and waits for `confirm` again
+> 2. Describe revision feedback in the terminal; the LLM updates the report and waits for `/confirm` again
 > 3. Confirm to proceed to S6 (PPT generation)
 
 ### Review Gate Mechanism
 
-After each stage completes, status becomes `awaiting_review`. The system supports the following 5 meta-commands:
+After each stage completes, status becomes `awaiting_review`. The system supports the following 6 meta-commands (all start with `/`, case-insensitive):
 
-1. **`confirm`**: Accept current output, advance to next stage
+1. **`/confirm`**: Accept current output, advance to next stage
    - Calls the stage's `is_ready` check; if it fails, prints a notice and stays in the current stage
    - On success, triggers Git commit: `feat(S1): confirm Topic Definition`
 
-2. **`exit`**: Save progress and exit
+2. **`/exit`**: Save progress and exit
    - Triggers Git commit: `chore: auto-save on exit`
    - Resume later with `anappt resume`
 
-3. **`status`**: Print the current pipeline status table (stage ID, name, status, iteration count)
+3. **`/status`**: Print the current pipeline status table (stage ID, name, status, iteration count)
 
-4. **`memory`**: Print project memory `.anappt/memory.md`
+4. **`/memory`**: Print project memory `.anappt/memory.md`
 
-5. **`help`**: Print the meta-command help
+5. **`/help`**: Print the meta-command help
 
-> **Revisions are free-text**: When the user input is not a meta-command, the entire text enters the current stage's LLM conversation as a message. The LLM updates the artifact based on the feedback and waits for the user's `confirm` again. The system does **not** provide a standalone `revise`/`config`/`reset` system action.
+6. **`/ppt <requirement>`**: Skip the S1–S5 prep stages and generate a PPT directly (see [PPT Generation Workflow](ppt-workflow.en.md))
+
+> **Meta-commands must start with `/`**: bare words (`confirm`/`exit`/`help`) and Chinese aliases (`退出`/`帮助`) have been removed. Input starting with `/` that is not a known meta-command (e.g. `/foo`) also enters the conversation as free text.
+>
+> **Revisions are free-text**: When the user input is not a meta-command, the entire text enters the current stage's LLM conversation as a message. The LLM updates the artifact based on the feedback and waits for the user's `/confirm` again. The system does **not** provide a standalone `revise`/`config`/`reset` system action.
 
 ### Artifact Files Summary
 

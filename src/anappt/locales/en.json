@@ -163,7 +163,19 @@
     "conv.project_complete": "All stages complete. Project delivered.",
     "conv.memory_empty": "(no project memory yet)",
     "conv.status_header": "Current pipeline status:",
-    "conv.help_text": "Meta-commands: confirm (advance) / status (show status) / memory (show memory) / help (help) / exit (quit). Other input goes to the LLM as conversation.",
+    "conv.help_text": "Meta-commands (/ prefix): /confirm (advance) /status (show status) /memory (show memory) /help (help) /exit (quit) /ppt <requirement> (direct PPT). Other input goes to the LLM as conversation.",
     "conv.exiting": "Exiting conversation...",
-    "conv.unknown_meta": "Unknown meta-command: {cmd}. Type help for available commands."
+    "conv.unknown_meta": "Unknown meta-command: {cmd}. Type /help for available commands.",
+    "conv.thinking_idle": "Organizing thoughts…",
+    "conv.ppt_skill_missing": "✗ dashi-ppt-skill not installed. Run 'anappt setup' first.",
+    "conv.ppt_directive": "The user wants to skip the preceding stages and generate a PPT directly. Based on the requirement below, construct output/ppt/goal.json (with title/goal/audience/owner/randomSeed/pageCount/themePack/slides[]; each slide must have a concrete layout and full props), then call render_deck to render output/ppt/presentation.html. final_report.md is not required. Strictly follow the JSON structure and layout conventions in SKILL.md; do not leave template default copy. When done, tell the user to review it in the browser.",
+    "conv.ppt_usage": "Usage: /ppt <PPT generation requirement>",
+    "conv.ppt_empty_requirement": "Please provide a PPT requirement, e.g. /ppt Generate a 10-slide deck on Q3 mobile growth",
+    "conv.ppt_done": "PPT generated. Please review it in the browser. To adjust, keep chatting; when satisfied, type /exit to quit.",
+    "tui.title": "📋 Report Builder · Step {step}/6: {name}",
+    "tui.title_complete": "📋 Report Builder · All stages complete",
+    "tui.input_placeholder": "Type here (/help for commands, Enter to send, Shift+Enter for newline)",
+    "tui.shortcuts": "Enter send · Shift+Enter newline · PgUp/PgDn scroll · /exit quit",
+    "tui.user_label": "👤 You",
+    "tui.assistant_label": "🤖 Assistant"
 }

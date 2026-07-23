@@ -361,15 +361,59 @@ def cmd_new(args: list[str]) -> int:
     return cmd_init(args)
 
 
+def _start_tui(
+    project_dir: Path,
+    mode: str,
+    welcome: bool = False,
+) -> int:
+    """Load the pipeline context and launch the textual TUI.
+
+    Shared by ``cmd_run`` / ``cmd_resume`` / ``cmd_interactive``: loads
+    the project context (without an InteractiveUI — the textual adapter
+    is wired in via ``runner_factory``), then constructs and runs a
+    :class:`anappt.tui.ReportBuilderApp`. The adapter serves as both the
+    ``ui`` and ``stream_sink`` for the :class:`ConversationRunner`.
+
+    Args:
+        project_dir: Path to the project directory.
+        mode: ConversationRunner mode — ``"run"`` or ``"interactive"``.
+        welcome: When True, write ``interactive.welcome`` to the chat
+            area on mount (used by ``anappt interactive``).
+
+    Returns:
+        Exit code (0 for success, 1 on missing project or load error).
+    """
+    from anappt.tui import ReportBuilderApp
+
+    print(t("cli.loading_config"))
+
+    try:
+        ctx = _load_pipeline_context(project_dir, ui=None)
+    except FileNotFoundError as e:
+        print(str(e))
+        return 1
+
+    print(t("cli.pipeline_started"))
+
+    def runner_factory(adapter):
+        ctx.ui = adapter
+        return ConversationRunner(ctx, mode=mode, ui=adapter, stream_sink=adapter)
+
+    welcome_message = t("interactive.welcome") if welcome else None
+    app = ReportBuilderApp(runner_factory, welcome_message=welcome_message)
+    app.run()
+    return 0
+
+
 def cmd_run(args: list[str]) -> int:
-    """Handle the 'run' command — delegate to ``ConversationRunner``.
+    """Handle the 'run' command — launch the textual TUI in ``run`` mode.
 
     Loads the project context (state + memory + LLM + git + skill manager)
-    and enters the unified conversation loop in ``run`` mode. The runner
-    drives stage entry, opening analysis, multi-turn dialog, ``confirm``
-    gating, and exit-time finalize (session summary + memory update +
-    git commit) — fully replacing the old Orchestrator.run/confirm/revise
-    path.
+    and enters the unified conversation loop via
+    :class:`anappt.tui.ReportBuilderApp`. The runner drives stage entry,
+    opening analysis, multi-turn dialog, ``/confirm`` gating, and
+    exit-time finalize (session summary + memory update + git commit) —
+    fully replacing the old Orchestrator.run/confirm/revise path.
 
     Args:
         args: Command arguments (unused).
@@ -383,23 +427,11 @@ def cmd_run(args: list[str]) -> int:
         print(t("cli.no_project_found"))
         return 1
 
-    ui = InteractiveUI()
-    print(t("cli.loading_config"))
-
-    try:
-        ctx = _load_pipeline_context(project_dir, ui=ui)
-    except FileNotFoundError as e:
-        print(str(e))
-        return 1
-
-    print(t("cli.pipeline_started"))
-    runner = ConversationRunner(ctx, mode="run", ui=ui)
-    runner.run()
-    return 0
+    return _start_tui(project_dir, mode="run")
 
 
 def cmd_resume(args: list[str]) -> int:
-    """Handle the 'resume' command — delegate to ``ConversationRunner``.
+    """Handle the 'resume' command — launch the textual TUI in ``run`` mode.
 
     In the conversational TUI model, resume and run share the same path:
     ``ConversationRunner._enter_stage`` handles all three resume scenarios
@@ -420,21 +452,7 @@ def cmd_resume(args: list[str]) -> int:
         print(t("cli.no_project_found"))
         return 1
 
-    ui = InteractiveUI()
-    print(t("cli.loading_config"))
-
-    try:
-        ctx = _load_pipeline_context(project_dir, ui=ui)
-    except FileNotFoundError as e:
-        print(str(e))
-        return 1
-
-    print(t("cli.pipeline_started"))
-    # resume shares ConversationRunner(mode="run") with cmd_run: the
-    # runner recovers from the persisted state.yaml automatically.
-    runner = ConversationRunner(ctx, mode="run", ui=ui)
-    runner.run()
-    return 0
+    return _start_tui(project_dir, mode="run")
 
 
 def cmd_status(args: list[str]) -> int:
@@ -684,16 +702,17 @@ def cmd_setup(args: list[str]) -> int:
 
 
 def cmd_interactive(args: list[str]) -> int:
-    """Handle the 'interactive' command — delegate to ``ConversationRunner``.
+    """Handle the 'interactive' command — launch the textual TUI.
 
     Loads the project context and enters the unified conversation loop in
-    ``interactive`` mode. In this mode the runner's system prompt carries
-    the full stage-state index, project memory, recent session-history
-    index, and a current-artifacts listing, so the LLM self-identifies
-    what the user most needs to do next and proactively prompts. The old
-    simple status/config/reset/help sub-command loop is removed; the
-    ``status`` / ``memory`` / ``help`` / ``confirm`` / ``exit`` meta-
-    commands remain available inside ``ConversationRunner``.
+    ``interactive`` mode via :class:`anappt.tui.ReportBuilderApp`. In this
+    mode the runner's system prompt carries the full stage-state index,
+    project memory, recent session-history index, and a current-artifacts
+    listing, so the LLM self-identifies what the user most needs to do
+    next and proactively prompts. The ``interactive.welcome`` line is
+    written to the chat area on mount (before the LLM opening). The
+    ``/status`` / ``/memory`` / ``/help`` / ``/confirm`` / ``/exit``
+    meta-commands remain available inside ``ConversationRunner``.
 
     Args:
         args: Command arguments (unused).
@@ -707,18 +726,7 @@ def cmd_interactive(args: list[str]) -> int:
         print(t("cli.no_project_found"))
         return 1
 
-    ui = InteractiveUI()
-    ui.print(t("interactive.welcome"))
-
-    try:
-        ctx = _load_pipeline_context(project_dir, ui=ui)
-    except FileNotFoundError as e:
-        ui.print(str(e))
-        return 1
-
-    runner = ConversationRunner(ctx, mode="interactive", ui=ui)
-    runner.run()
-    return 0
+    return _start_tui(project_dir, mode="interactive", welcome=True)
 
 
 # Command registry

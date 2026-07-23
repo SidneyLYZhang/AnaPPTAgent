@@ -205,8 +205,37 @@ class TestMainCLI:
         assert result == 1
 
 
+class _FakeReportBuilderApp:
+    """Lightweight stand-in for ReportBuilderApp used in CLI delegation tests.
+
+    ``anappt run`` / ``resume`` / ``interactive`` now construct a
+    :class:`anappt.tui.ReportBuilderApp` and call ``app.run()``. The real
+    textual ``run()`` starts an event loop that would block the test, so
+    the delegation tests patch ``anappt.tui.ReportBuilderApp`` with this
+    fake. Its ``run()`` invokes ``runner_factory`` with a mock adapter and
+    immediately calls ``runner.run()``, mirroring what the real
+    ``on_mount`` + worker thread do — without the textual overhead.
+    """
+
+    def __init__(self, runner_factory, welcome_message=None) -> None:
+        self.runner_factory = runner_factory
+        self.welcome_message = welcome_message
+
+    def run(self) -> None:
+        """Invoke runner_factory + runner.run() without starting textual."""
+        adapter = MagicMock()
+        runner = self.runner_factory(adapter)
+        if runner is not None:
+            runner.run()
+
+
 class TestConversationRunnerDelegation:
-    """Tests that run/resume/interactive delegate to ConversationRunner (C2/C3/C4)."""
+    """Tests that run/resume/interactive delegate to ConversationRunner (C2/C3/C4).
+
+    These tests patch ``anappt.tui.ReportBuilderApp`` with a lightweight
+    fake that invokes ``runner_factory`` + ``runner.run()`` without
+    starting the real textual event loop (which would block the test).
+    """
 
     def test_run_invokes_conversation_runner(
         self, mock_project: Path, stub_collaborators: None, monkeypatch
@@ -216,6 +245,7 @@ class TestConversationRunnerDelegation:
         runner_mock.run = MagicMock(return_value=None)
         constructor = MagicMock(return_value=runner_mock)
         monkeypatch.setattr("anappt.cli.ConversationRunner", constructor)
+        monkeypatch.setattr("anappt.tui.ReportBuilderApp", _FakeReportBuilderApp)
 
         result = main(["run"])
 
@@ -239,6 +269,7 @@ class TestConversationRunnerDelegation:
         runner_mock.run = MagicMock(return_value=None)
         constructor = MagicMock(return_value=runner_mock)
         monkeypatch.setattr("anappt.cli.ConversationRunner", constructor)
+        monkeypatch.setattr("anappt.tui.ReportBuilderApp", _FakeReportBuilderApp)
 
         result = main(["resume"])
 
@@ -256,6 +287,7 @@ class TestConversationRunnerDelegation:
         runner_mock.run = MagicMock(return_value=None)
         constructor = MagicMock(return_value=runner_mock)
         monkeypatch.setattr("anappt.cli.ConversationRunner", constructor)
+        monkeypatch.setattr("anappt.tui.ReportBuilderApp", _FakeReportBuilderApp)
 
         result = main(["interactive"])
 
@@ -274,6 +306,7 @@ class TestConversationRunnerDelegation:
             "anappt.cli.ConversationRunner",
             MagicMock(return_value=runner_mock),
         )
+        monkeypatch.setattr("anappt.tui.ReportBuilderApp", _FakeReportBuilderApp)
 
         # Spy on Orchestrator to ensure cmd_run never constructs one.
         from anappt.orchestrator import Orchestrator

@@ -373,7 +373,7 @@ class _FakeUI:
     def input(self, prompt: str) -> str:
         if self.inputs:
             return self.inputs.pop(0)
-        return "exit"
+        return "/exit"
 
     def confirm(self, prompt: str) -> bool:
         return True
@@ -612,7 +612,7 @@ class TestResumeConversation:
         # --- Phase 2: Create new ConversationRunner with fresh state ---
         llm = _make_resume_llm_from_s2()
         # 5 confirms advance S2-S6; pipeline completes after S6 confirm
-        ui = _FakeUI(inputs=["confirm"] * 5)
+        ui = _FakeUI(inputs=["/confirm"] * 5)
         ctx = _build_conv_ctx(project_dir, llm, ui)
 
         # Verify state was loaded from disk
@@ -669,7 +669,7 @@ class TestResumeConversation:
         # Build context with empty ReportConfig (no report.yaml to load)
         llm = _make_s1_only_llm()
         # confirm S1 → S2, then exit
-        ui = _FakeUI(inputs=["confirm", "exit"])
+        ui = _FakeUI(inputs=["/confirm", "/exit"])
         ctx = _build_conv_ctx(
             project_dir, llm, ui, config=ReportConfig()
         )

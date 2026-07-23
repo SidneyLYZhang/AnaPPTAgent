@@ -196,14 +196,17 @@ cd my_report
 #    Supported formats: CSV, Excel, SQLite, DuckDB, Parquet
 cp ~/sales_data.csv data/
 
-# 4. Run the pipeline (starts the conversational TUI)
+# 4. Run the pipeline (starts the full-screen textual conversational TUI,
+#    with streaming LLM output + a live thinking bar)
 anappt run
 
 # 5. S1: describe your topic, audience and objectives in conversation;
 #    the agent generates report.yaml and .anappt/s1_topic.md
 
-# 6. Once a stage's output is ready, type 'confirm' to advance;
-#    or type free-text feedback and the agent revises the stage output
+# 6. Once a stage's output is ready, type /confirm to advance;
+#    or type free-text feedback and the agent revises the stage output.
+#    Meta-commands all start with / (/confirm /exit /status /memory /help),
+#    and /ppt <requirement> skips the prep stages to generate a PPT directly.
 
 # 7. After S5, review the generated report at output/final_report.md
 # 8. After S6, open the presentation at output/ppt/presentation.html
@@ -220,7 +223,7 @@ anappt run
 | `anappt status`                | Show all stage statuses                           |
 | `anappt config show`           | Display the full effective configuration (incl. thinking, web search/fetch, API key masked, sources annotated) |
 | `anappt config set`            | Interactively configure three model roles (incl. thinking) and web_search/web_fetch |
-| `anappt interactive`           | Start interactive mode with command loop          |
+| `anappt interactive`           | Start interactive mode (full-screen textual conversational TUI) |
 | `anappt setup`                | Install/initialize dashi-ppt skill and other resources |
 
 ## Project Structure
@@ -323,7 +326,7 @@ If Node.js is not available, AnaPPTAgent falls back to HTML-only output which ca
 | S5    | Report Generation         | writing    | Transforms analysis into polished report (output/final_report.md) |
 | S6    | PPT Generation            | writing    | Converts report to HTML slide presentation (output/ppt/presentation.html) |
 
-Each stage pauses for user review — type `confirm` to advance or enter free-text feedback for the LLM to revise the artifact.
+Each stage pauses for user review — type `/confirm` to advance or enter free-text feedback for the LLM to revise the artifact. Meta-commands all start with `/` (`/confirm`, `/exit`, `/status`, `/memory`, `/help`); LLM replies stream in real time with a live "thinking bar". You can also use `/ppt <requirement>` to skip the S1–S5 prep stages and generate a PPT directly.
 
 ## Internationalization
 

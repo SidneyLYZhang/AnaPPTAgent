@@ -2,7 +2,7 @@
 
 ### 概述
 
-分析报告的生成经过 S1 到 S5 共五个阶段，由 `ConversationRunner` 驱动的对话式 TUI 串接。每个阶段使用不同角色的 LLM 模型，通过对话生成特定产物，并在阶段间设置人工审核门控（`confirm`）。S6（PPT 生成）见 `ppt-workflow.md`，不在本文档范围。
+分析报告的生成经过 S1 到 S5 共五个阶段，由 `ConversationRunner` 驱动的对话式 TUI 串接。每个阶段使用不同角色的 LLM 模型，通过对话生成特定产物，并在阶段间设置人工审核门控（`/confirm`）。S6（PPT 生成）见 `ppt-workflow.md`，不在本文档范围。
 
 ### 流程图
 
@@ -19,7 +19,7 @@
      │               │               │               │               │
      ▼               ▼               ▼               ▼               ▼
   [审核门控]      [审核门控]      [审核门控]       [审核门控]       [审核门控]
-   confirm         confirm         confirm          confirm          confirm
+   /confirm        /confirm        /confirm         /confirm         /confirm
 ```
 
 ### S1: 选题与目标定义
@@ -37,7 +37,7 @@
    - 交付形式（期望 PPT 页数、是否需要 PDF/HTML、主题偏好）
 2. 调用 `write_artifact("report.yaml", <YAML>)` 写入项目根目录的 `report.yaml`，YAML 结构含 `project`/`report`/`delivery` 三段
 3. 调用 `write_artifact(".anappt/s1_topic.md", <内容>)` 写入细化选题文档，对选题背景、动机、目标受众、报告目标、成功标准、建议分析思路做更详尽的展开
-4. 提示用户通读两份产物，确认无误后输入 `confirm` 推进；用户也可直接在对话中提出修改意见，由 LLM 更新后再等待 `confirm`
+4. 提示用户通读两份产物，确认无误后输入 `/confirm` 推进；用户也可直接在对话中提出修改意见，由 LLM 更新后再等待 `/confirm`
 
 **输出产物**：
 - `report.yaml` — 项目根目录的报告规格书
@@ -74,7 +74,7 @@
    - 预估数据量级
    - 数据来源
 4. 调用 `write_artifact(".anappt/s2_data_requirement.md", <内容>)` 写入清单
-5. 提示用户通读产物，确认无误后输入 `confirm`；如需修改可在对话中提出
+5. 提示用户通读产物，确认无误后输入 `/confirm`；如需修改可在对话中提出
 
 > **重要**：这是用户准备数据的关键时机。审核 S2 后，用户应将所需的数据文件（CSV、Excel、SQLite、DuckDB、Parquet）放入 `data/` 目录，然后确认进入 S3。
 
@@ -144,7 +144,7 @@
    - `fetch_url`：读取相关网页/报告/政策文件全文（若 `JINA_API_KEY` 未配置则改用 `search_web` 摘要）
 4. 整合分析结论，调用 `write_artifact(".anappt/s4_analysis_report.md", <内容>)` 写入草案，使用清晰的 Markdown 结构（执行摘要、方法、关键发现、详细分析、建议等章节）
 5. 提示用户复核草案并提供反馈；接收反馈 → 深度推理补充 → 更新报告 → 再次提交用户确认
-6. 循环直到用户输入 `confirm` 推进至 S5
+6. 循环直到用户输入 `/confirm` 推进至 S5
 
 **输出产物**：`.anappt/s4_analysis_report.md`（对话路径不生成 `.anappt/data_info.json`）
 
@@ -179,9 +179,9 @@
    - 附录 / 数据说明
 3. 调用 `write_artifact("output/final_report.md", <内容>)` 写入报告，使用清晰的 Markdown 格式（标题、表格、列表、图片引用等）
 4. 写完后**明确提醒用户打开 `output/final_report.md` 查看和修改**，告知用户可以：
-   - 直接用编辑器打开文件自行修改，改完后回到对话输入 `confirm`
+   - 直接用编辑器打开文件自行修改，改完后回到对话输入 `/confirm`
    - 或直接在对话中提出修改意见，由 LLM 更新报告后再请用户确认
-5. 用户可多次往返修改，直到满意后输入 `confirm` 推进至 S6
+5. 用户可多次往返修改，直到满意后输入 `/confirm` 推进至 S6
 
 **输出产物**：`output/final_report.md`（对话路径不生成 `.anappt/s5_report.md`）
 
@@ -197,28 +197,32 @@
 
 > **重要**：S5 完成后，系统会提示用户打开 `output/final_report.md` 查看和修改。用户可以：
 > 1. 直接编辑 `output/final_report.md` 文件
-> 2. 在终端中描述修改意见，由 LLM 更新报告后再次等待 `confirm`
+> 2. 在终端中描述修改意见，由 LLM 更新报告后再次等待 `/confirm`
 > 3. 确认后进入 S6（PPT 生成）
 
 ### 阶段间审核机制
 
-每个阶段完成后，状态变为 `awaiting_review`，系统支持以下 5 个元命令：
+每个阶段完成后，状态变为 `awaiting_review`，系统支持以下 6 个元命令（均以 `/` 开头，大小写不敏感）：
 
-1. **`confirm`**：接受当前输出，进入下一阶段
+1. **`/confirm`**：接受当前输出，进入下一阶段
    - 调用阶段 `is_ready` 校验，若不通过则提示并保持在当前阶段
    - 通过后触发 Git 提交：`feat(S1): confirm 选题与目标定义`
 
-2. **`exit`**：保存当前进度并退出
+2. **`/exit`**：保存当前进度并退出
    - 触发 Git 提交：`chore: auto-save on exit`
    - 下次可用 `anappt resume` 继续
 
-3. **`status`**：打印当前流水线状态表（阶段 ID、名称、状态、迭代次数）
+3. **`/status`**：打印当前流水线状态表（阶段 ID、名称、状态、迭代次数）
 
-4. **`memory`**：打印项目记忆 `.anappt/memory.md`
+4. **`/memory`**：打印项目记忆 `.anappt/memory.md`
 
-5. **`help` / `帮助`**：打印元命令帮助
+5. **`/help`**：打印元命令帮助
 
-> **修改意见为自由文本**：当用户输入的内容不是元命令时，整段文本会作为对话消息进入当前阶段的 LLM 对话，由 LLM 根据反馈更新产出物后再次等待用户 `confirm`。系统**不提供**独立的 `revise`/`config`/`reset` 系统操作。
+6. **`/ppt <需求>`**：跳过 S1–S5 前置阶段，直达生成 PPT（详见 [PPT 生成流程](ppt-workflow.md)）
+
+> **元命令必须以 `/` 开头**：裸单词（`confirm`/`exit`/`help`）与中文别名（`退出`/`帮助`）已移除。以 `/` 开头但非已知元命令的输入（如 `/foo`）也作为自由文本进入对话。
+>
+> **修改意见为自由文本**：当用户输入的内容不是元命令时，整段文本会作为对话消息进入当前阶段的 LLM 对话，由 LLM 根据反馈更新产出物后再次等待用户 `/confirm`。系统**不提供**独立的 `revise`/`config`/`reset` 系统操作。
 
 ### 产物文件一览
 

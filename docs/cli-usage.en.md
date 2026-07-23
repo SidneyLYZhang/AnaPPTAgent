@@ -193,7 +193,7 @@ cd my_report
 anappt run
 ```
 
-This enters a **conversational TUI** where multi-turn LLM conversations drive each stage's output (topic, data requirements, analysis, report, PPT, etc.). After each stage completes, use the `confirm` meta-command to advance to the next stage; you may enter free text at any time to converse with the LLM, request changes, or add details.
+This enters a **conversational TUI** where multi-turn LLM conversations drive each stage's output (topic, data requirements, analysis, report, PPT, etc.). After each stage completes, use the `/confirm` meta-command to advance to the next stage; you may enter free text at any time to converse with the LLM, request changes, or add details.
 
 ### Resume the Pipeline
 
@@ -260,15 +260,16 @@ anappt setup --registry https://registry.npmmirror.com
 anappt interactive
 ```
 
-Interactive mode is the **conversational TUI**: entering free text starts a multi-turn conversation with the LLM that drives each stage's output. The supported meta-commands are exactly 5:
+Interactive mode is the **conversational TUI** (a full-screen textual interface with streaming LLM output + a live thinking bar): entering free text starts a multi-turn conversation with the LLM that drives each stage's output. Meta-commands all start with `/` (case-insensitive):
 
 | Meta-command | Action |
 |--------------|--------|
-| `confirm` | Confirm the current stage's output and advance to the next stage |
-| `exit` | Exit the conversational TUI |
-| `status` | Show the status of each stage |
-| `memory` | View/edit the cross-stage shared memory `.anappt/memory.md` |
-| `help` | Show meta-command help |
+| `/confirm` | Confirm the current stage's output and advance to the next stage |
+| `/exit` | Exit the conversational TUI |
+| `/status` | Show the status of each stage |
+| `/memory` | View the cross-stage shared memory `.anappt/memory.md` |
+| `/help` | Show meta-command help |
+| `/ppt <requirement>` | Skip the S1–S5 prep stages and generate a PPT directly |
 
 See the [Interactive TUI Guide](tui-usage.md) for details.
 

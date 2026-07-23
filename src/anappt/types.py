@@ -1,7 +1,9 @@
 """Core type definitions for the AnaPPTAgent pipeline.
 
-Defines PipelineContext, StageOutput, and the InteractiveUIProtocol
-that stages and the orchestrator depend on.
+Defines PipelineContext, StageOutput, the InteractiveUIProtocol that
+stages and the orchestrator depend on, and the StreamingSink protocol
+used by the conversation runner to push live LLM streaming output to a
+TUI adapter (replacing plain ``ui.print`` for chat messages).
 """
 
 from __future__ import annotations
@@ -75,6 +77,62 @@ class InteractiveUIProtocol(Protocol):
         Args:
             message: Progress message to display.
         """
+        ...
+
+
+@runtime_checkable
+class StreamingSink(Protocol):
+    """Protocol for streaming LLM output to a live UI.
+
+    The conversation runner accepts an optional ``stream_sink``: when
+    present, the sink is responsible for rendering the live "thinking"
+    bar and the final user/assistant chat messages, replacing the plain
+    ``ui.print`` path used for non-streaming (e.g. headless test) runs.
+
+    The textual TUI adapter implements both
+    :class:`InteractiveUIProtocol` and this protocol; a simple in-memory
+    recording sink is used in unit tests.
+    """
+
+    def user_message(self, text: str) -> None:
+        """Render a complete user message into the chat area.
+
+        Args:
+            text: The user's submitted text.
+        """
+        ...
+
+    def assistant_message(self, text: str) -> None:
+        """Render a complete assistant message into the chat area.
+
+        Called once after the LLM stream for a turn has fully completed.
+
+        Args:
+            text: The full accumulated assistant response text.
+        """
+        ...
+
+    def thinking_update(self, buf: str) -> None:
+        """Update the live thinking bar with the current buffer tail.
+
+        Called on every streaming delta. ``buf`` is the accumulated
+        reasoning buffer (preferred) or content buffer so far.
+
+        Args:
+            buf: The current thinking buffer string.
+        """
+        ...
+
+    def thinking_idle(self, msg: str) -> None:
+        """Show an idle placeholder while awaiting the first token.
+
+        Args:
+            msg: Placeholder text (e.g. "正在组织思路…").
+        """
+        ...
+
+    def thinking_clear(self) -> None:
+        """Hide/clear the thinking bar after a stream completes."""
         ...
 
 

@@ -163,7 +163,19 @@
     "conv.project_complete": "全部阶段已完成,项目交付。",
     "conv.memory_empty": "(暂无项目记忆)",
     "conv.status_header": "当前流水线状态:",
-    "conv.help_text": "可用元命令: confirm(确认推进) / status(查看状态) / memory(查看记忆) / help(帮助) / exit(退出)。其它输入作为对话内容进入 LLM。",
+    "conv.help_text": "可用元命令（/ 前缀）: /confirm(确认推进) /status(查看状态) /memory(查看记忆) /help(帮助) /exit(退出) /ppt <需求>(直达生成 PPT)。其它输入作为对话内容进入 LLM。",
     "conv.exiting": "正在退出对话...",
-    "conv.unknown_meta": "未知元命令: {cmd}。输入 help 查看可用命令。"
+    "conv.unknown_meta": "未知元命令: {cmd}。输入 /help 查看可用命令。",
+    "conv.thinking_idle": "正在组织思路…",
+    "conv.ppt_skill_missing": "✗ dashi-ppt-skill 未安装，请先运行 'anappt setup' 安装",
+    "conv.ppt_directive": "用户希望跳过前置阶段、直接生成 PPT。请基于以下需求构造 output/ppt/goal.json（包含 title/goal/audience/owner/randomSeed/pageCount/themePack/slides[]，每页填具体 layout 与完整 props），并调用 render_deck 渲染 output/ppt/presentation.html。不需要 final_report.md。严格遵循 SKILL.md 的 JSON 结构与版式约定，不残留模板默认文案。完成后告知用户在浏览器中浏览确认。",
+    "conv.ppt_usage": "用法: /ppt <PPT 生成需求>",
+    "conv.ppt_empty_requirement": "请提供 PPT 生成需求，例如: /ppt 生成关于 Q3 移动端增长的 10 页 PPT",
+    "conv.ppt_done": "PPT 已生成，请在浏览器中浏览确认。如需调整可继续对话，满意后可输入 /exit 退出。",
+    "tui.title": "📋 报告构建助手 · 步骤 {step}/6：{name}",
+    "tui.title_complete": "📋 报告构建助手 · 已完成全部阶段",
+    "tui.input_placeholder": "请输入（/help 查看命令，Enter 发送，Shift+Enter 换行）",
+    "tui.shortcuts": "Enter 发送 · Shift+Enter 换行 · PgUp/PgDn 翻历史 · /exit 退出",
+    "tui.user_label": "👤 你",
+    "tui.assistant_label": "🤖 助手"
 }
