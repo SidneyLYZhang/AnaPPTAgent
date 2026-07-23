@@ -338,6 +338,7 @@ class TestS4Declarative:
             "search_web",
             "fetch_url",
             "read_memory",
+            "update_memory",
             "read_history",
         ]
 

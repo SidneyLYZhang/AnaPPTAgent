@@ -259,6 +259,7 @@ class TestS3Declarative:
             "write_artifact",
             "execute_python",
             "read_memory",
+            "update_memory",
             "read_history",
         ]
 

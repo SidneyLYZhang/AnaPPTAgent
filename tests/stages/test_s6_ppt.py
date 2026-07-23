@@ -521,6 +521,7 @@ class TestS6Declarative:
             "render_deck",
             "export_pptx",
             "read_memory",
+            "update_memory",
             "read_history",
         ]
 

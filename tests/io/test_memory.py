@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import MagicMock
 
@@ -192,3 +193,112 @@ class TestUpdate:
 
         assert result is True
         assert memory_file.read_text(encoding="utf-8") == "new content"
+
+
+class TestAppend:
+    """Tests for MemoryManager.append (incremental, LLM-free memory writes)."""
+
+    def test_append_creates_file_with_date_prefix(self, memory_file: Path) -> None:
+        """Appending a non-empty entry writes a ``## YYYY-MM-DD`` header + body."""
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        mgr = MemoryManager(memory_file)
+        result = mgr.append("受众已确认为数据团队")
+
+        assert result is True
+        assert memory_file.exists()
+        content = memory_file.read_text(encoding="utf-8")
+        assert f"## {today}" in content
+        assert "受众已确认为数据团队" in content
+
+    def test_append_creates_file_when_not_exists(self, tmp_path: Path) -> None:
+        """When the memory file does not yet exist, append creates it."""
+        fresh = tmp_path / ".anappt" / "memory.md"
+        assert not fresh.exists()
+
+        mgr = MemoryManager(fresh)
+        result = mgr.append("first entry")
+
+        assert result is True
+        assert fresh.exists()
+        assert "first entry" in fresh.read_text(encoding="utf-8")
+
+    def test_append_creates_parent_directory(self, memory_file: Path) -> None:
+        """When the parent directory does not yet exist, it is created."""
+        assert not memory_file.parent.exists()
+
+        mgr = MemoryManager(memory_file)
+        result = mgr.append("parent dir auto-created")
+
+        assert result is True
+        assert memory_file.parent.is_dir()
+        assert memory_file.exists()
+
+    def test_append_two_entries_both_present(self, memory_file: Path) -> None:
+        """Two successive appends both survive, each with its own date header."""
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        mgr = MemoryManager(memory_file)
+        mgr.append("first decision")
+        mgr.append("second decision")
+
+        content = memory_file.read_text(encoding="utf-8")
+        # Both entries present (no overwrite).
+        assert "first decision" in content
+        assert "second decision" in content
+        # Each has its own date header — count occurrences of today's header.
+        assert content.count(f"## {today}") == 2
+        # Ordering: first entry comes before second.
+        assert content.index("first decision") < content.index("second decision")
+
+    def test_append_empty_entry_returns_false(self, memory_file: Path) -> None:
+        """An empty string entry is skipped; returns False and writes nothing."""
+        mgr = MemoryManager(memory_file)
+        result = mgr.append("")
+
+        assert result is False
+        assert not memory_file.exists()
+
+    def test_append_whitespace_only_entry_returns_false(
+        self, memory_file: Path
+    ) -> None:
+        """A whitespace-only entry is stripped to empty and skipped."""
+        mgr = MemoryManager(memory_file)
+        result = mgr.append("   \n\t  ")
+
+        assert result is False
+        assert not memory_file.exists()
+
+    def test_append_returns_true_on_success(self, memory_file: Path) -> None:
+        """A successful append returns True."""
+        mgr = MemoryManager(memory_file)
+        assert mgr.append("a real entry") is True
+
+    def test_append_preserves_existing_content_and_appends_at_end(
+        self, memory_file: Path
+    ) -> None:
+        """Appending to a non-empty file keeps old content and adds a separator
+        plus the new block at the end."""
+        memory_file.parent.mkdir(parents=True, exist_ok=True)
+        memory_file.write_text("# Project Memory\n\n- old note", encoding="utf-8")
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        mgr = MemoryManager(memory_file)
+        result = mgr.append("new finding")
+
+        assert result is True
+        content = memory_file.read_text(encoding="utf-8")
+        # Old content still present.
+        assert "# Project Memory" in content
+        assert "old note" in content
+        # New entry at the end with today's header.
+        assert content.endswith(f"## {today}\nnew finding")
+        # A separator (blank line) exists between old and new content.
+        assert "old note\n\n## " in content
+
+    def test_append_strips_entry_whitespace(self, memory_file: Path) -> None:
+        """Leading/trailing whitespace on the entry is stripped before writing."""
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        mgr = MemoryManager(memory_file)
+        mgr.append("   padded entry   ")
+
+        content = memory_file.read_text(encoding="utf-8")
+        assert f"## {today}\npadded entry" in content

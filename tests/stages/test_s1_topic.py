@@ -257,7 +257,13 @@ class TestS1Declarative:
         self, empty_ctx: PipelineContext
     ) -> None:
         tools = S1TopicStage().tools(empty_ctx)
-        assert tools == ["read_file", "write_artifact", "read_memory", "read_history"]
+        assert tools == [
+            "read_file",
+            "write_artifact",
+            "read_memory",
+            "update_memory",
+            "read_history",
+        ]
 
     def test_is_ready_false_when_no_report_yaml(
         self, empty_ctx: PipelineContext

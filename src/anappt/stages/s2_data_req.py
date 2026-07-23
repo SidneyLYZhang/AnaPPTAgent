@@ -15,7 +15,8 @@ Declarative interface (used by the conversation-driven TUI):
       time range, granularity, estimated volume, sources) purely from
       analysis needs (do NOT check whether the data exists), then write
       the artifact and wait for user ``confirm``.
-    - tools: ``read_file``/``write_artifact``/``read_memory``/``read_history``.
+    - tools: ``read_file``/``write_artifact``/``read_memory``/
+      ``update_memory``/``read_history``.
     - is_ready: ``.anappt/s2_data_requirement.md`` exists and contains at
       least one heading or list item.
 
@@ -187,7 +188,7 @@ class S2DataRequirementStage(StageBase):
         Returns:
             List of enabled tool names for S2.
         """
-        return ["read_file", "write_artifact", "read_memory", "read_history"]
+        return ["read_file", "write_artifact", "read_memory", "update_memory", "read_history"]
 
     def is_ready(self, ctx: PipelineContext) -> bool:
         """Check whether S2's expected artifact is ready.

@@ -208,7 +208,13 @@ class TestS5Declarative:
     def test_tools_returns_expected_subset(self, tmp_path: Path) -> None:
         ctx = _make_empty_ctx(tmp_path)
         tools = S5ReportStage().tools(ctx)
-        assert tools == ["read_file", "write_artifact", "read_memory", "read_history"]
+        assert tools == [
+            "read_file",
+            "write_artifact",
+            "read_memory",
+            "update_memory",
+            "read_history",
+        ]
 
     def test_is_ready_false_when_artifact_missing(self, tmp_path: Path) -> None:
         """Empty project dir → artifact missing → is_ready False."""

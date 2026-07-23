@@ -112,3 +112,47 @@ class MemoryManager:
         self.memory_file.parent.mkdir(parents=True, exist_ok=True)
         self.memory_file.write_text(response, encoding="utf-8")
         return True
+
+    def append(self, entry: str) -> bool:
+        """向 ``memory.md`` 末尾增量追加一条带日期前缀的记忆条目。
+
+        与 :meth:`update` 的区别在于:``update`` 会让 LLM 对整个
+        ``memory.md`` 做全量重写(决定是否更新、保留已有时间戳并追加
+        新条目);而本方法不调用 LLM,直接做一次纯文件的增量追加——
+        读取现有内容,在末尾(若文件非空则先加一个空行分隔)写入
+        ``## YYYY-MM-DD`` 标题行,再跟 ``entry`` 正文。日期使用 UTC,
+        与 :meth:`update` 中 ``datetime.now(UTC)`` 的取值保持一致。
+
+        对 ``entry`` 会先做 ``.strip()`` 处理;若 strip 后为空,则视为
+        无实质内容,跳过写入并返回 ``False``(不写仅含日期标题的空条目,
+        以避免给记忆文件引入噪音)。
+
+        文件不存在时自动创建,父目录自动 ``mkdir(parents=True,
+        exist_ok=True)``。读写均使用 UTF-8 编码。对 ``OSError`` 等异常
+        做防御:出错时返回 ``False`` 而不抛出,与 :meth:`read` 的容错
+        风格一致。
+
+        Args:
+            entry: 待追加的记忆条目正文(纯文本)。会先 strip,若 strip
+                后为空则跳过本次追加。
+
+        Returns:
+            ``True`` 表示成功追加;``False`` 表示 ``entry`` strip 后为
+            空或读写过程中发生 ``OSError``。
+        """
+        entry = (entry or "").strip()
+        if not entry:
+            return False
+
+        today = datetime.now(UTC).strftime("%Y-%m-%d")
+        block = f"## {today}\n{entry}"
+
+        try:
+            current = self.read()
+            # 文件非空时,在已有内容与新条目之间加一个空行分隔。
+            content = f"{current}\n\n{block}" if current else block
+            self.memory_file.parent.mkdir(parents=True, exist_ok=True)
+            self.memory_file.write_text(content, encoding="utf-8")
+        except OSError:
+            return False
+        return True

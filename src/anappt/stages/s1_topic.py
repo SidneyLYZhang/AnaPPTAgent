@@ -10,7 +10,8 @@ Declarative interface (used by the conversation-driven TUI):
     - artifacts: ``report.yaml`` (project root) and ``.anappt/s1_topic.md``.
     - system_prompt_fragment: Chinese guidance for the LLM to drive the
       conversation per design 4.1.
-    - tools: ``read_file``/``write_artifact``/``read_memory``/``read_history``.
+    - tools: ``read_file``/``write_artifact``/``read_memory``/
+      ``update_memory``/``read_history``.
     - is_ready: validates report.yaml parses and core fields are non-empty
       and s1_topic.md exists.
 
@@ -199,7 +200,7 @@ class S1TopicStage(StageBase):
         Returns:
             List of enabled tool names for S1.
         """
-        return ["read_file", "write_artifact", "read_memory", "read_history"]
+        return ["read_file", "write_artifact", "read_memory", "update_memory", "read_history"]
 
     def is_ready(self, ctx: PipelineContext) -> bool:
         """Check whether S1's expected artifacts are ready.

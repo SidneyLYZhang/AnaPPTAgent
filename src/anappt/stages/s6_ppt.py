@@ -19,7 +19,7 @@ Declarative interface (used by the conversation-driven TUI):
       await user ``confirm`` after browser editing, and (if
       ``delivery.formats`` contains pptx) call ``export_pptx``.
     - tools: ``read_file``/``write_artifact``/``render_deck``/
-      ``export_pptx``/``read_memory``/``read_history``.
+      ``export_pptx``/``read_memory``/``update_memory``/``read_history``.
     - is_ready: both ``output/ppt/goal.json`` (parseable as JSON) and
       ``output/ppt/presentation.html`` exist.
 
@@ -292,6 +292,7 @@ class S6PPTStage(StageBase):
             "render_deck",
             "export_pptx",
             "read_memory",
+            "update_memory",
             "read_history",
         ]
 

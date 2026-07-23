@@ -942,3 +942,149 @@ class TestEmptyInputSkipped:
         # The persisted messages list contains only the opening pair
         # (no user free-text turn was appended).
         assert len(runner.messages) == 2  # instruction + opening reply
+
+
+# ---------------------------------------------------------------------------
+# 9. update_memory tool (callable + ToolDef)
+# ---------------------------------------------------------------------------
+
+
+class TestUpdateMemoryTool:
+    """The update_memory tool appends to memory.md and reports OK."""
+
+    def test_update_memory_appends_and_returns_ok(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        llm = _make_llm()
+        ui = FakeUI()
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+
+        funcs = runner._build_tool_funcs()
+        assert "update_memory" in funcs
+        result = funcs["update_memory"](content="关键发现:渠道 A ROI 最高")
+
+        # Return string signals success and reports char count.
+        assert result.startswith("OK:")
+        assert str(len("关键发现:渠道 A ROI 最高")) in result
+        # The entry was actually appended to memory.md.
+        assert "关键发现:渠道 A ROI 最高" in memory.read()
+
+    def test_update_memory_without_memory_manager_returns_error(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+    ) -> None:
+        """When ctx.memory is None, the closure returns an error string."""
+        llm = _make_llm()
+        ui = FakeUI()
+        # Build ctx without a memory manager.
+        ctx = PipelineContext(
+            project_dir=project_dir,
+            config=ReportConfig(),
+            llm=llm,
+            state=state,
+            ui=ui,
+            session=session,
+            git=None,
+            memory=None,
+        )
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+
+        funcs = runner._build_tool_funcs()
+        result = funcs["update_memory"](content="anything")
+
+        assert result == "Error: memory manager not available"
+
+    def test_update_memory_tool_def_requires_content(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        """The update_memory ToolDef marks ``content`` as required."""
+        llm = _make_llm()
+        ui = FakeUI()
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+
+        defs = runner._build_tool_defs()
+        assert "update_memory" in defs
+        params = defs["update_memory"].parameters
+        assert "content" in params["required"]
+
+
+# ---------------------------------------------------------------------------
+# 10. _finalize ordering regression (session_content captured before flush)
+# ---------------------------------------------------------------------------
+
+
+class TestFinalizeOrdering:
+    """Regression: ``memory.update`` receives the full session text even though
+    ``flush()`` clears the in-memory entries buffer.
+
+    The bug being guarded against: ``_finalize`` used to call
+    ``session.get_full_text()`` *after* ``flush()``, by which point the
+    buffer was empty — so ``memory.update`` got an empty session_content.
+    The fix caches ``session_full_text`` before ``flush()``.
+    """
+
+    def test_memory_update_receives_non_empty_session_content(
+        self,
+        project_dir: Path,
+        state: StateManager,
+        session: SessionLogger,
+        memory: MemoryManager,
+    ) -> None:
+        # A unique marker logged into the session entries. If the
+        # session_content passed to memory.update is non-empty, this
+        # marker must appear in the memory.update user prompt.
+        marker = "UNIQUE_MARKER_42_渠道ROI峰值出现在七月"
+
+        # Populate the session buffer with real entries.
+        session.new_session("S1")
+        session.log_user("用户问了一个问题")
+        session.log_agent(marker)
+
+        # LLM returns NO_UPDATE so memory.update writes nothing (we only
+        # care about the prompt it received). Both finalize_summary and
+        # memory.update go through llm.chat.
+        llm = _make_llm(chat_return="NO_UPDATE")
+        ui = FakeUI()
+        ctx = _build_ctx(project_dir, state, session, memory, llm, ui)
+        runner = ConversationRunner(ctx, mode="run", ui=ui)
+
+        runner._finalize()
+
+        # llm.chat was called at least twice (finalize_summary + memory.update).
+        assert llm.chat.call_count >= 2
+
+        # Find the memory.update call: its user prompt contains both
+        # memory-section and session-section headers (see MemoryManager.update).
+        memory_calls = []
+        for call in llm.chat.call_args_list:
+            _role, messages = call.args
+            user_content = messages[-1]["content"]
+            if (
+                "=== 当前 memory.md ===" in user_content
+                and "=== 本次会话内容 ===" in user_content
+            ):
+                memory_calls.append(user_content)
+        assert len(memory_calls) == 1, "expected exactly one memory.update call"
+
+        # The session_content passed to memory.update still carries the
+        # marker logged before flush — proving get_full_text ran first.
+        assert marker in memory_calls[0]
+
+        # flush() still executed: an archived session file was written.
+        session_files = list(
+            (project_dir / ".anappt" / "session_history").iterdir()
+        )
+        assert len(session_files) >= 1
+        assert any(f.name.endswith("_S1.md") for f in session_files)

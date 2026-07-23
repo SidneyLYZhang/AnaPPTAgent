@@ -14,7 +14,8 @@ Declarative interface (used by the conversation-driven TUI):
       core findings (multi-section) / conclusions & recommendations /
       appendix), write the artifact, remind the user to open and review
       the file, and await user ``confirm``.
-    - tools: ``read_file``/``write_artifact``/``read_memory``/``read_history``.
+    - tools: ``read_file``/``write_artifact``/``read_memory``/
+      ``update_memory``/``read_history``.
     - is_ready: ``output/final_report.md`` exists, is non-empty, and
       contains at least 2 level-1 headings (``# ``).
 
@@ -206,7 +207,7 @@ class S5ReportStage(StageBase):
         Returns:
             List of enabled tool names for S5.
         """
-        return ["read_file", "write_artifact", "read_memory", "read_history"]
+        return ["read_file", "write_artifact", "read_memory", "update_memory", "read_history"]
 
     def is_ready(self, ctx: PipelineContext) -> bool:
         """Check whether S5's expected artifact is ready.

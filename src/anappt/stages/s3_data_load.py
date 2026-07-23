@@ -17,7 +17,7 @@ Declarative interface (used by the conversation-driven TUI):
       data if coverage is insufficient, write the artifact and wait for
       user ``confirm``.
     - tools: ``read_file``/``write_artifact``/``execute_python``/
-      ``read_memory``/``read_history``.
+      ``read_memory``/``update_memory``/``read_history``.
     - is_ready: ``.anappt/s3_data_profile.md`` exists and is non-empty.
 
 The legacy ``run()`` method (pure data processing, no LLM) is preserved
@@ -215,6 +215,7 @@ class S3DataLoadStage(StageBase):
             "write_artifact",
             "execute_python",
             "read_memory",
+            "update_memory",
             "read_history",
         ]
 

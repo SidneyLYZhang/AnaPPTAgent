@@ -235,7 +235,13 @@ class TestS2Declarative:
             state=state,
         )
         tools = S2DataRequirementStage().tools(ctx)
-        assert tools == ["read_file", "write_artifact", "read_memory", "read_history"]
+        assert tools == [
+            "read_file",
+            "write_artifact",
+            "read_memory",
+            "update_memory",
+            "read_history",
+        ]
 
     def test_is_ready_false_when_artifact_missing(self, tmp_path: Path) -> None:
         """Empty project dir → artifact missing → is_ready False."""

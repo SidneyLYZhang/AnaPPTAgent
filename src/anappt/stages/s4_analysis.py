@@ -17,7 +17,7 @@ Declarative interface (used by the conversation-driven TUI):
       analysis and update the report, optionally generate charts to
       ``output/images/``, write the artifact and await user ``confirm``.
     - tools: ``read_file``/``write_artifact``/``execute_python``/
-      ``search_web``/``fetch_url``/``read_memory``/``read_history``.
+      ``search_web``/``fetch_url``/``read_memory``/``update_memory``/``read_history``.
     - is_ready: ``.anappt/s4_analysis_report.md`` exists and is non-empty.
 
 The legacy ``run()`` method is preserved for backward compatibility with
@@ -315,6 +315,7 @@ class S4AnalysisStage(StageBase):
             "search_web",
             "fetch_url",
             "read_memory",
+            "update_memory",
             "read_history",
         ]
 

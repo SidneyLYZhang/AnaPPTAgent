@@ -54,7 +54,10 @@ GATE_RULES = (
     "且系统会校验当前阶段产出是否就绪。\n"
     "- 在用户输入 ``confirm`` 前,你不得宣告阶段已完成,也不得假定下一阶段已开始。\n"
     "- 用户提出修改意见时,你应根据反馈更新产出物后再次请用户确认。\n"
-    "- 你只能调用本阶段已授权的工具子集;未授权的工具调用会被系统拒绝。"
+    "- 你只能调用本阶段已授权的工具子集;未授权的工具调用会被系统拒绝。\n"
+    "- 当出现重要决策、关键发现、数据进展或阶段产出完成时,你应主动调用 "
+    "``update_memory`` 工具记录一条简洁、信息密集的记忆条目"
+    "(系统会自动加日期前缀),供后续会话与阶段引用。"
 )
 
 RUN_DIRECTIVE = (
@@ -480,28 +483,36 @@ class ConversationRunner:
     def _finalize(self) -> None:
         """Finalize the conversation on exit.
 
-        Generates the session core summary, flushes the session log to
-        disk, asks the LLM whether memory needs updating, and fires the
-        git commit-on-exit hook. All steps are best-effort: exceptions
-        are swallowed so a failure in one step does not block the
-        others.
+        Generates the session core summary, captures the full session
+        text, flushes the session log to disk (which clears the
+        in-memory buffer), asks the LLM whether memory needs updating
+        using the captured text, and fires the git commit-on-exit hook.
+        The full session text is captured BEFORE ``flush()`` so that the
+        memory update receives the complete conversation rather than an
+        empty buffer. All steps are best-effort: exceptions are
+        swallowed so a failure in one step does not block the others.
         """
         role: ModelRole = model_role_for_stage(self.ctx.state.state.current_stage)
+        session_full_text = ""
         if self.ctx.session is not None:
             try:
                 self.ctx.session.finalize_summary(self.ctx.llm, role)
             except Exception:
                 pass
+            # Capture the full session text BEFORE flush() clears the buffer.
+            try:
+                session_full_text = self.ctx.session.get_full_text()
+            except Exception:
+                session_full_text = ""
             try:
                 self.ctx.session.flush()
             except Exception:
                 pass
         if self.ctx.memory is not None:
             try:
-                if self.ctx.session is not None:
-                    self.ctx.memory.update(
-                        self.ctx.llm, role, self.ctx.session.get_full_text()
-                    )
+                self.ctx.memory.update(
+                    self.ctx.llm, role, session_full_text
+                )
             except Exception:
                 pass
         if self.ctx.git is not None:
@@ -660,6 +671,26 @@ class ConversationRunner:
                     "Returns the full memory text."
                 ),
                 parameters={"type": "object", "properties": {}},
+            ),
+            "update_memory": ToolDef(
+                name="update_memory",
+                description=(
+                    "Append a new entry to the project memory (.anappt/memory.md). "
+                    "Use this to record important decisions, key findings, or stage "
+                    "milestones as they happen during the conversation. The entry is "
+                    "auto-prefixed with today's date (YYYY-MM-DD). Keep entries concise "
+                    "and information-dense; avoid restating the dialog itself."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "content": {
+                            "type": "string",
+                            "description": "The memory entry text to append.",
+                        },
+                    },
+                    "required": ["content"],
+                },
             ),
             "read_history": ToolDef(
                 name="read_history",
@@ -842,6 +873,14 @@ class ConversationRunner:
                 return "Error: memory manager not available"
             return ctx.memory.read() or "(memory empty)"
 
+        def update_memory(content: str) -> str:
+            if ctx.memory is None:
+                return "Error: memory manager not available"
+            ok = ctx.memory.append(content)
+            if not ok:
+                return "Error: failed to append memory entry"
+            return f"OK: appended {len(content)} chars to memory.md"
+
         def read_history(target: str = "all") -> str:
             from anappt.io.session import read_history as _read_history
 
@@ -951,6 +990,7 @@ class ConversationRunner:
             "read_file": read_file,
             "write_artifact": write_artifact,
             "read_memory": read_memory,
+            "update_memory": update_memory,
             "read_history": read_history,
             "list_stage_artifacts": list_stage_artifacts,
             "execute_python": execute_python,
